@@ -17,10 +17,10 @@ Bu, **Tkinter** ile geliştirilmiş, **SQLite** veritabanı kullanan kapsamlı b
 
 ## 🖼️ Ekran Görüntüleri
 
-> ⚠️ Aşağıdaki alanlara ilgili ekran görüntülerini ekleyebilirsiniz:
 
-- Ana arayüz: `images/ana-arayuz.png`
-- Gelir/Gider grafikleri: `images/grafikler.png`
+
+- Ana arayüz: `arayüz.png`
+- Gelir/Gider grafikleri: `Grafik.png`
 
 
 ## 🛠️ Kullanılan Teknolojiler

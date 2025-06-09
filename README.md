@@ -1,46 +1,78 @@
 # 💰 Gelir Gider Takip Uygulaması
 
-Bu, **Tkinter** ile geliştirilmiş, **SQLite** veritabanı kullanan kapsamlı bir **gelir-gider takip uygulamasıdır**. Kullanıcıların finansal işlemlerini kolayca **kaydetmesini, filtrelemesini, güncellemesini, silmesini** ve hatta **tekrarlayan gelir/giderleri otomatik olarak yönetmesini** sağlar. Ayrıca **finansal durumu grafiklerle görselleştirme** imkanı sunar.
+Bu, Tkinter ile geliştirilmiş, SQLite veritabanı kullanan kapsamlı bir gelir-gider takip uygulamasıdır.  
+Kullanıcıların finansal işlemlerini kolayca kaydetmelerini, filtrelemelerini, güncellemelerini, silmelerini ve hatta tekrarlayan gelir/giderlerini otomatik olarak yönetmelerini sağlar. Ayrıca, finansal durumunuzu görselleştirmek için grafikler sunar.
+
+---
 
 ## 🚀 Özellikler
 
-- ✅ **İşlem Kaydı**: Gelir ve giderleri miktar, kategori, açıklama ve tarih bilgileriyle kaydedin.
-- 🔁 **Tekrarlayan İşlemler**: Maaş, kira gibi düzenli işlemleri tanımlayın ve otomatik olarak uygulansın.
-- 🔍 **Filtreleme ve Arama**: İşlem türüne, kategoriye veya tarih aralığına göre kayıtları filtreleyin ya da arama yapın.
-- ✏️ **İşlem Düzenleme ve Silme**: Mevcut kayıtlar üzerinde değişiklik yapın veya silin.
-- 📊 **Finansal Görselleştirme**:
-  - Kategorilere göre **pasta grafik**
-  - Zaman içindeki **kümülatif bakiye çizgisi**
-- 📆 **Takvim Desteği**: Tarih seçimleri için kullanıcı dostu takvim widget’ı.
-- 📁 **SQLite Veritabanı**: Verileriniz yerel olarak güvenli bir şekilde saklanır.
-- 🧮 **Özet Bilgiler**: Toplam gelir, gider ve güncel bakiyeyi anlık görüntüleyin.
+- 📥 **İşlem Kaydı:** Gelir ve giderleri miktar, kategori, açıklama ve tarih bilgileriyle kaydetme  
+- ✏️ **İşlem Düzenleme/Silme:** Mevcut kayıtları seçip düzenleme veya silme  
+- 🔍 **Detaylı Filtreleme & Arama:** İşlem türüne, kategoriye, tarih aralığına veya açıklamaya göre filtreleme  
+- 📊 **Özet Bilgiler:** Toplam gelir, gider ve mevcut bakiye bilgileri  
+- 🔁 **Tekrarlayan İşlemler Yönetimi:**
+  - Düzenli gelir/giderleri bir kez tanımla
+  - Günlük, haftalık, aylık, yıllık gibi sıklıklarla otomatik oluşturma
+  - Uygulama açılışında otomatik ekleme ve hatırlatıcı
+
+- 📈 **Finansal Görselleştirme:**
+  - Kategori bazlı gelir-gider dağılımı (Pasta grafik)
+  - Kümülatif bakiye değişimi (Çizgi grafik)
+
+- 🧩 **Kullanıcı Dostu Arayüz:** Modern ve anlaşılır arayüz (Tkinter & ttk)  
+- 🗓️ **Takvim Widget'ı:** Kolay tarih seçimi için `tkcalendar`  
+- 🗄️ **Dayanıklı Veritabanı:** SQLite ile veriler yerel olarak saklanır  
+
+---
 
 ## 🖼️ Ekran Görüntüleri
 
+### Ana Arayüz  
+![Ana Arayüz](images/arayüz.png)
 
+### Gelir & Gider Grafik Ekranı  
+![Grafik Ekranı](images/Grafik.png)
 
-- Ana arayüz: `arayüz.png`
-- Gelir/Gider grafikleri: `Grafik.png`
-
+---
 
 ## 🛠️ Kullanılan Teknolojiler
 
-- **Python 3.x**
-- **Tkinter** – GUI
-- **SQLite3** – Veritabanı
-- **Matplotlib** – Grafik çizimi
-- **tkcalendar** – Takvim widget'ı
+- Python 3.x  
+- Tkinter (GUI)  
+- SQLite3 (Veritabanı)  
+- Matplotlib (Grafik çizimi)  
+- tkcalendar (Takvim seçimi)
+
+---
 
 ## ⚙️ Kurulum ve Çalıştırma
 
-### 📌 Ön Gereksinimler
+### 🔧 Ön Gereksinimler
+- Python 3.x yüklü olmalıdır
 
-- Python 3.x yüklü olmalı
-
-### 🔧 Kurulum Adımları
+### 📥 Kurulum Adımları
 
 ```bash
+# Depoyu klonla
 git clone https://github.com/YasarTahaSamdanli/gelir-gider-takip-uygulamasi.git
+
+# Dizin içine gir
 cd gelir-gider-takip-uygulamasi
-pip install tkinter matplotlib tkcalendar
+
+# Gerekli kütüphaneleri yükle
+pip install tkinter
+pip install matplotlib
+pip install tkcalendar
+
+
 python main.py
+# veya
+python gelir_gider_uygulamasi.py
+
+# PyInstaller kur
+pip install pyinstaller
+
+# .exe dosyasını oluştur
+pyinstaller --onefile --windowed --hidden-import=babel.numbers main.py
+

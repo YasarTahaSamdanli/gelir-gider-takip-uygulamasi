@@ -1,0 +1,19 @@
+# Default ignored files
+/shelf/
+/workspace.xml
+# Editor-based HTTP Client requests
+/httpRequests/
+# Datasource local storage ignored files
+/dataSources/
+/dataSources.local.xml
+# PyInstaller generated files
+*.exe
+*.spec
+build/
+dist/
+
+# Database file
+veriler.db
+
+# Tkinter calendar cache
+.tcl/

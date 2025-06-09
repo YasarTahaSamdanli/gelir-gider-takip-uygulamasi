@@ -29,10 +29,10 @@ Kullanıcıların finansal işlemlerini kolayca kaydetmelerini, filtrelemelerini
 ## 🖼️ Ekran Görüntüleri
 
 ### Ana Arayüz  
-![Ana Arayüz](images/arayüz.png)
+![Ana Arayüz](https://github.com/YasarTahaSamdanli/gelir-gider-takip-uygulamasi/blob/ade8218a6b606473e1cd7dae3279ed66ad784a37/aray%C3%BCz.png)
 
 ### Gelir & Gider Grafik Ekranı  
-![Grafik Ekranı](images/Grafik.png)
+![Grafik Ekranı](https://github.com/YasarTahaSamdanli/gelir-gider-takip-uygulamasi/blob/ade8218a6b606473e1cd7dae3279ed66ad784a37/Grafik.png)
 
 ---
 

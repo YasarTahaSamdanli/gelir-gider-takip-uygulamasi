@@ -5,43 +5,79 @@ from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from tkcalendar import DateEntry
+import bcrypt
+import re
+import time
 
 # Matplotlib için Türkçe font ayarı (isteğe bağlı, sistemde yüklü bir font olmalı)
-plt.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans']  # İlk yüklü olanı kullanır
-plt.rcParams['axes.unicode_minus'] = False  # Eksi işaretinin doğru görünmesi için
+plt.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans']
+plt.rcParams['axes.unicode_minus'] = False
 
 
-class GelirGiderUygulamasi:
+# --- Şifre Hashleme Fonksiyonları ---
+def hash_password_bcrypt(password):
+    hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+    return hashed.decode('utf-8')
+
+
+def check_password_bcrypt(hashed_password_from_db, user_password_input):
+    try:
+        return bcrypt.checkpw(user_password_input.encode('utf-8'), hashed_password_from_db.encode('utf-8'))
+    except ValueError:
+        return False
+
+
+# --- Kullanıcı Yönetimi Ekranları ---
+
+class LoginRegisterApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Gelişmiş Gelir Gider Takibi")
-        self.root.geometry("1200x800")  # Pencere boyutunu tekrarlayan işlemler için büyüttük
+        self.root.title("Giriş / Kayıt")
+        self.root.geometry("400x300")
+        self.root.resizable(False, False)
         self.root.configure(bg="#f5f5f5")
 
-        # Seçili öğenin ID'sini tutmak için değişkenler
-        self.selected_item_id = None  # Ana işlemler listesi için
-        self.selected_recurring_item_id = None  # Tekrarlayan işlemler listesi için
+        self.conn = None
+        self.cursor = None
+        self.baglanti_olustur()  # Veritabanı bağlantısı ve tabloları oluştur
 
-        # Veritabanı bağlantısı ve tablo oluşturma
-        self.baglanti_olustur()
-
-        # Arayüz bileşenleri
-        self.arayuz_olustur()
-
-        # Başlangıç verilerini yükle
-        self.listele()
-        self.listele_tekrar_eden_islemler()  # Tekrarlayan işlemleri listele
-
-        # Uygulama başladığında tekrarlayan işlemleri kontrol et ve oluştur
-        self.uretim_kontrolu()
+        self.current_frame = None
+        self.show_login_screen()
 
     def baglanti_olustur(self):
-        """SQLite veritabanı bağlantısını kurar ve 'islemler' ile 'tekrar_eden_islemler' tablolarını oluşturur."""
+        """SQLite veritabanı bağlantısını kurar ve tabloları oluşturur/günceller."""
         try:
             self.conn = sqlite3.connect("veriler.db")
             self.cursor = self.conn.cursor()
 
-            # Ana işlemler tablosu
+            # 1. users tablosunu oluştur (ilk ve en önemli tablo)
+            self.cursor.execute("""
+                                CREATE TABLE IF NOT EXISTS users
+                                (
+                                    id
+                                    INTEGER
+                                    PRIMARY
+                                    KEY
+                                    AUTOINCREMENT,
+                                    kullanici_adi
+                                    TEXT
+                                    NOT
+                                    NULL
+                                    UNIQUE,
+                                    sifre_hash
+                                    TEXT
+                                    NOT
+                                    NULL,
+                                    login_attempts
+                                    INTEGER
+                                    DEFAULT
+                                    0,
+                                    lockout_until
+                                    TEXT
+                                )
+                                """)
+
+            # 2. islemler tablosunu oluştur (kullanici_id sütunuyla birlikte)
             self.cursor.execute("""
                                 CREATE TABLE IF NOT EXISTS islemler
                                 (
@@ -65,12 +101,15 @@ class GelirGiderUygulamasi:
                                     tarih
                                     TEXT
                                     NOT
+                                    NULL,
+                                    kullanici_id
+                                    INTEGER
+                                    NOT
                                     NULL
                                 )
                                 """)
 
-            # Tekrarlayan işlemler tablosu
-            # DİKKAT: 'baslangic_tarihi' ve 'son_uretilen_tarih' sütun adları tutarlı olmalı!
+            # 3. tekrar_eden_islemler tablosunu oluştur (kullanici_id sütunuyla birlikte)
             self.cursor.execute("""
                                 CREATE TABLE IF NOT EXISTS tekrar_eden_islemler
                                 (
@@ -94,26 +133,262 @@ class GelirGiderUygulamasi:
                                     baslangic_tarihi
                                     TEXT
                                     NOT
-                                    NULL, -- Bu isim tablodaki sütun adıdır
+                                    NULL,
                                     siklilik
                                     TEXT
                                     NOT
-                                    NULL, -- Günlük, Haftalık, Aylık, Yıllık
+                                    NULL,
                                     son_uretilen_tarih
-                                    TEXT  -- Son olarak üretilen işlemin tarihi
+                                    TEXT,
+                                    kullanici_id
+                                    INTEGER
+                                    NOT
+                                    NULL
                                 )
                                 """)
+
+            # 4. Mevcut tablolara yeni sütun ekleme (sadece tablo zaten VARSA ve sütun YOKSA)
+            # PRAGMA table_info kullanarak sütunun varlığını kontrol et
+
+            # islemler tablosu için kullanici_id sütunu kontrolü
+            self.cursor.execute("PRAGMA table_info(islemler);")
+            cols = [col[1] for col in self.cursor.fetchall()]
+            if 'kullanici_id' not in cols:
+                try:
+                    self.cursor.execute("ALTER TABLE islemler ADD COLUMN kullanici_id INTEGER DEFAULT 0 NOT NULL")
+                    print("islemler tablosuna kullanici_id sütunu eklendi (eski veritabanı için).")
+                except sqlite3.Error as e:
+                    # Bu hata genellikle sütun zaten varsa oluşur, bu durumda yoksayabiliriz.
+                    # Diğer ciddi hataları hala yakalarız.
+                    if "duplicate column name: kullanici_id" not in str(e):
+                        raise e
+
+            # tekrar_eden_islemler tablosu için kullanici_id sütunu kontrolü
+            self.cursor.execute("PRAGMA table_info(tekrar_eden_islemler);")
+            cols = [col[1] for col in self.cursor.fetchall()]
+            if 'kullanici_id' not in cols:
+                try:
+                    self.cursor.execute(
+                        "ALTER TABLE tekrar_eden_islemler ADD COLUMN kullanici_id INTEGER DEFAULT 0 NOT NULL")
+                    print("tekrar_eden_islemler tablosuna kullanici_id sütunu eklendi (eski veritabanı için).")
+                except sqlite3.Error as e:
+                    if "duplicate column name: kullanici_id" not in str(e):
+                        raise e
+
             self.conn.commit()
         except sqlite3.Error as e:
             messagebox.showerror("Veritabanı Hatası",
-                                 f"Veritabanı bağlantısı kurulamadı veya tablo oluşturulamadı: {e}")
-            self.root.destroy()  # Uygulamayı kapat
+                                 f"Veritabanı bağlantısı kurulamadı veya tablo oluşturulamadı: {e}\nLütfen uygulamanın bulunduğu klasördeki 'veriler.db' dosyasını silip tekrar deneyin.")
+            self.root.destroy()
+
+    def show_login_screen(self):
+        if self.current_frame:
+            self.current_frame.destroy()
+        self.current_frame = LoginScreen(self.root, self)
+        self.current_frame.pack(fill="both", expand=True, padx=20, pady=20)
+
+    def show_register_screen(self):
+        if self.current_frame:
+            self.current_frame.destroy()
+        self.current_frame = RegisterScreen(self.root, self)
+        self.current_frame.pack(fill="both", expand=True, padx=20, pady=20)
+
+    def start_main_app(self, user_id, username):
+        if self.current_frame:
+            self.current_frame.destroy()
+        self.root.title("Gelişmiş Gelir Gider Takibi")
+        self.root.geometry("1200x800")
+        self.root.resizable(True, True)
+        GelirGiderUygulamasi(self.root, self.conn, self.cursor, user_id, username)
+
+
+class LoginScreen(ttk.Frame):
+    MAX_LOGIN_ATTEMPTS = 3
+    LOCKOUT_DURATION_MINUTES = 5
+
+    def __init__(self, master, app_instance):
+        super().__init__(master)
+        self.app_instance = app_instance
+        self.master = master
+
+        stil = ttk.Style()
+        stil.configure("Login.TLabel", font=("Arial", 12))
+        stil.configure("Login.TEntry", font=("Arial", 12))
+        stil.configure("Login.TButton", font=("Arial", 12, "bold"), padding=10)
+
+        ttk.Label(self, text="Giriş Yap", font=("Arial", 16, "bold")).pack(pady=10)
+
+        form_frame = ttk.Frame(self)
+        form_frame.pack(pady=10)
+
+        ttk.Label(form_frame, text="Kullanıcı Adı:", style="Login.TLabel").grid(row=0, column=0, padx=5, pady=5,
+                                                                                sticky="w")
+        self.username_entry = ttk.Entry(form_frame, style="Login.TEntry", width=30)
+        self.username_entry.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+
+        ttk.Label(form_frame, text="Şifre:", style="Login.TLabel").grid(row=1, column=0, padx=5, pady=5, sticky="w")
+        self.password_entry = ttk.Entry(form_frame, style="Login.TEntry", show="*", width=30)
+        self.password_entry.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
+
+        ttk.Button(self, text="Giriş", style="Login.TButton", command=self.login).pack(pady=10)
+        ttk.Button(self, text="Kayıt Ol", style="Login.TButton", command=self.app_instance.show_register_screen).pack(
+            pady=5)
+
+    def login(self):
+        username = self.username_entry.get()
+        password = self.password_entry.get()
+
+        if not username or not password:
+            messagebox.showerror("Hata", "Kullanıcı adı ve şifre boş bırakılamaz.")
+            return
+
+        self.app_instance.cursor.execute(
+            "SELECT id, sifre_hash, login_attempts, lockout_until FROM users WHERE kullanici_adi = ?", (username,))
+        user_data = self.app_instance.cursor.fetchone()
+
+        if user_data:
+            user_id, stored_password_hash, login_attempts, lockout_until_str = user_data
+
+            if lockout_until_str:
+                lockout_until = datetime.strptime(lockout_until_str, "%Y-%m-%d %H:%M:%S")
+                if datetime.now() < lockout_until:
+                    remaining_time_seconds = (lockout_until - datetime.now()).total_seconds()
+                    minutes = int(remaining_time_seconds // 60)
+                    seconds = int(remaining_time_seconds % 60)
+                    messagebox.showwarning("Hesap Kilitli",
+                                           f"Bu hesap, çok sayıda başarısız giriş denemesi nedeniyle {minutes} dakika {seconds} saniye kilitlenmiştir.")
+                    time.sleep(1)
+                    return
+
+            if check_password_bcrypt(stored_password_hash, password):
+                messagebox.showinfo("Başarılı", f"Hoş geldiniz, {username}!")
+                self.app_instance.cursor.execute(
+                    "UPDATE users SET login_attempts = 0, lockout_until = NULL WHERE id = ?", (user_id,))
+                self.app_instance.conn.commit()
+                self.app_instance.start_main_app(user_id, username)
+            else:
+                login_attempts += 1
+                self.app_instance.cursor.execute("UPDATE users SET login_attempts = ? WHERE id = ?",
+                                                 (login_attempts, user_id))
+                self.app_instance.conn.commit()
+
+                if login_attempts >= self.MAX_LOGIN_ATTEMPTS:
+                    lockout_time = datetime.now() + timedelta(minutes=self.LOCKOUT_DURATION_MINUTES)
+                    self.app_instance.cursor.execute("UPDATE users SET lockout_until = ? WHERE id = ?",
+                                                     (lockout_time.strftime("%Y-%m-%d %H:%M:%S"), user_id))
+                    self.app_instance.conn.commit()
+                    messagebox.showerror("Giriş Başarısız",
+                                         f"Çok sayıda yanlış deneme. Hesap {self.LOCKOUT_DURATION_MINUTES} dakika kilitlenmiştir.")
+                else:
+                    messagebox.showerror("Giriş Başarısız", "Geçersiz kullanıcı adı veya şifre.")
+
+                time.sleep(1)
+        else:
+            messagebox.showerror("Giriş Başarısız", "Geçersiz kullanıcı adı veya şifre.")
+            time.sleep(1)
+
+
+class RegisterScreen(ttk.Frame):
+    def __init__(self, master, app_instance):
+        super().__init__(master)
+        self.app_instance = app_instance
+        self.master = master
+
+        stil = ttk.Style()
+        stil.configure("Register.TLabel", font=("Arial", 12))
+        stil.configure("Register.TEntry", font=("Arial", 12))
+        stil.configure("Register.TButton", font=("Arial", 12, "bold"), padding=10)
+
+        ttk.Label(self, text="Kayıt Ol", font=("Arial", 16, "bold")).pack(pady=10)
+
+        form_frame = ttk.Frame(self)
+        form_frame.pack(pady=10)
+
+        ttk.Label(form_frame, text="Kullanıcı Adı:", style="Register.TLabel").grid(row=0, column=0, padx=5, pady=5,
+                                                                                   sticky="w")
+        self.username_entry = ttk.Entry(form_frame, style="Register.TEntry", width=30)
+        self.username_entry.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+
+        ttk.Label(form_frame, text="Şifre:", style="Register.TLabel").grid(row=1, column=0, padx=5, pady=5, sticky="w")
+        self.password_entry = ttk.Entry(form_frame, style="Register.TEntry", show="*", width=30)
+        self.password_entry.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
+
+        ttk.Label(form_frame, text="Şifre Tekrar:", style="Register.TLabel").grid(row=2, column=0, padx=5, pady=5,
+                                                                                  sticky="w")
+        self.password_confirm_entry = ttk.Entry(form_frame, style="Register.TEntry", show="*", width=30)
+        self.password_confirm_entry.grid(row=2, column=1, padx=5, pady=5, sticky="ew")
+
+        ttk.Button(self, text="Kayıt Ol", style="Register.TButton", command=self.register).pack(pady=10)
+        ttk.Button(self, text="Giriş Ekranına Dön", style="Register.TButton",
+                   command=self.app_instance.show_login_screen).pack(pady=5)
+
+    def register(self):
+        username = self.username_entry.get()
+        password = self.password_entry.get()
+        password_confirm = self.password_confirm_entry.get()
+
+        if not username or not password or not password_confirm:
+            messagebox.showerror("Hata", "Tüm alanlar doldurulmalıdır.")
+            return
+
+        if password != password_confirm:
+            messagebox.showerror("Hata", "Şifreler uyuşmuyor.")
+            return
+
+        if len(password) < 8:
+            messagebox.showerror("Hata", "Şifre en az 8 karakter olmalıdır.")
+            return
+        if not re.search("[a-z]", password):
+            messagebox.showerror("Hata", "Şifre küçük harf içermelidir.")
+            return
+        if not re.search("[A-Z]", password):
+            messagebox.showerror("Hata", "Şifre büyük harf içermelidir.")
+            return
+        if not re.search("[0-9]", password):
+            messagebox.showerror("Hata", "Şifre sayı içermelidir.")
+            return
+        if not re.search("[!@#$%^&*(),.?\":{}|<>]", password):
+            messagebox.showerror("Hata", "Şifre en az bir özel karakter içermelidir (!@#$%^&* vb.).")
+            return
+
+        try:
+            self.app_instance.cursor.execute("SELECT id FROM users WHERE kullanici_adi = ?", (username,))
+            if self.app_instance.cursor.fetchone():
+                messagebox.showerror("Hata", "Bu kullanıcı adı zaten mevcut.")
+                return
+
+            hashed_password = hash_password_bcrypt(password)
+            self.app_instance.cursor.execute(
+                "INSERT INTO users (kullanici_adi, sifre_hash, login_attempts, lockout_until) VALUES (?, ?, ?, ?)",
+                (username, hashed_password, 0, None))
+            self.app_instance.conn.commit()
+            messagebox.showinfo("Başarılı", "Kayıt başarıyla tamamlandı. Şimdi giriş yapabilirsiniz.")
+            self.app_instance.show_login_screen()
+        except sqlite3.Error as e:
+            messagebox.showerror("Hata", f"Kayıt işlemi sırasında hata oluştu: {e}")
+
+
+class GelirGiderUygulamasi:
+    def __init__(self, root, conn, cursor, kullanici_id, username):
+        self.root = root
+        self.conn = conn
+        self.cursor = cursor
+        self.kullanici_id = kullanici_id
+        self.username = username
+
+        self.selected_item_id = None
+        self.selected_recurring_item_id = None
+
+        self.arayuz_olustur()
+
+        self.listele()
+        self.listele_tekrar_eden_islemler()
+
+        self.uretim_kontrolu()
 
     def arayuz_olustur(self):
-        """Uygulamanın kullanıcı arayüzünü (UI) oluşturur."""
-        # Stil ayarları
         stil = ttk.Style()
-        stil.theme_use("clam")  # Daha modern bir tema
+        stil.theme_use("clam")
         stil.configure("TFrame", background="#f5f5f5")
         stil.configure("TLabel", background="#f5f5f5", font=("Arial", 10))
         stil.configure("TButton", font=("Arial", 10, "bold"), padding=6, background="#e0e0e0")
@@ -124,29 +399,25 @@ class GelirGiderUygulamasi:
         stil.configure("TLabelframe", background="#f5f5f5", bordercolor="#d0d0d0", relief="solid")
         stil.configure("TLabelframe.Label", font=("Arial", 12, "bold"), foreground="#333333")
 
-        # Ana içerik frame'i (sol ve sağ panelleri ayırmak için)
         main_frame = ttk.Frame(self.root)
         main_frame.pack(pady=10, padx=20, fill="both", expand=True)
 
-        # Sol Panel (Giriş, Filtreleme, Özet)
         left_panel = ttk.Frame(main_frame)
         left_panel.pack(side="left", fill="both", expand=True, padx=(0, 10))
 
-        # Sağ Panel (Tekrarlayan İşlemler)
         right_panel = ttk.Frame(main_frame)
         right_panel.pack(side="right", fill="both", expand=True, padx=(10, 0))
 
-        # Başlık
         baslik_frame = ttk.Frame(left_panel, padding="10 10 10 10")
-        baslik_frame.pack(pady=10, fill="x", padx=0)  # Sol panele göre ayarladık
+        baslik_frame.pack(pady=10, fill="x", padx=0)
         ttk.Label(baslik_frame, text="Gelişmiş Gelir - Gider Takip Uygulaması",
-                  font=("Arial", 18, "bold"), foreground="#0056b3").pack()
+                  font=("Arial", 18, "bold"), foreground="#0056b3").pack(side="left")
+        ttk.Label(baslik_frame, text=f"Kullanıcı: {self.username}",
+                  font=("Arial", 10, "italic"), foreground="#555").pack(side="right", padx=10)
 
-        # Giriş Paneli (Sol Panelde)
         giris_frame = ttk.LabelFrame(left_panel, text="Yeni İşlem Ekle / Düzenle", padding=15)
         giris_frame.pack(pady=10, padx=0, fill="x")
 
-        # Giriş bileşenleri ve etiketleri
         input_widgets = [
             ("İşlem Türü:", "tur_var", ["Gelir", "Gider"], "Combobox"),
             ("Miktar (₺):", "miktar_entry", None, "Entry"),
@@ -179,7 +450,6 @@ class GelirGiderUygulamasi:
 
         giris_frame.grid_columnconfigure(1, weight=1)
 
-        # Butonlar
         buton_frame = ttk.Frame(giris_frame, padding="10 0 0 0")
         buton_frame.grid(row=len(input_widgets), column=0, columnspan=2, pady=10, sticky="ew")
 
@@ -190,7 +460,6 @@ class GelirGiderUygulamasi:
         ttk.Button(buton_frame, text="Grafik Göster", command=self.grafik_goster).pack(side="left", padx=5, fill="x",
                                                                                        expand=True)
 
-        # Filtreleme Paneli (Sol Panelde)
         filtre_frame = ttk.LabelFrame(left_panel, text="Filtreleme ve Arama", padding=15)
         filtre_frame.pack(pady=10, padx=0, fill="x")
 
@@ -232,7 +501,6 @@ class GelirGiderUygulamasi:
         for i in range(6):
             filtre_frame.grid_columnconfigure(i, weight=1)
 
-        # Liste Paneli (Ana İşlemler - Sol Panelde)
         liste_frame = ttk.Frame(left_panel, padding="10 0 0 0")
         liste_frame.pack(pady=10, padx=0, fill="both", expand=True)
 
@@ -270,7 +538,6 @@ class GelirGiderUygulamasi:
 
         self.liste.bind("<<TreeviewSelect>>", self.liste_secildi)
 
-        # Özet Paneli (Sol Panelde)
         ozet_frame = ttk.LabelFrame(left_panel, text="Özet Bilgiler", padding=15)
         ozet_frame.pack(pady=10, padx=0, fill="x")
 
@@ -286,11 +553,9 @@ class GelirGiderUygulamasi:
                                       font=("Arial", 11, "bold"))
         self.bakiye_label.pack(side="left", padx=20, fill="x", expand=True)
 
-        # --- Tekrarlayan İşlemler Paneli (Sağ Panelde) ---
         tekrar_eden_frame = ttk.LabelFrame(right_panel, text="Tekrarlayan İşlemler Tanımla", padding=15)
         tekrar_eden_frame.pack(pady=10, padx=0, fill="x")
 
-        # Tekrarlayan İşlem Giriş Alanları
         recurring_input_widgets = [
             ("İşlem Türü:", "tur_tekrar_var", ["Gelir", "Gider"], "Combobox"),
             ("Miktar (₺):", "miktar_tekrar_entry", None, "Entry"),
@@ -324,7 +589,6 @@ class GelirGiderUygulamasi:
 
         tekrar_eden_frame.grid_columnconfigure(1, weight=1)
 
-        # Tekrarlayan İşlem Butonları
         tekrar_eden_buton_frame = ttk.Frame(tekrar_eden_frame, padding="10 0 0 0")
         tekrar_eden_buton_frame.grid(row=len(recurring_input_widgets), column=0, columnspan=2, pady=10, sticky="ew")
 
@@ -337,7 +601,6 @@ class GelirGiderUygulamasi:
                                                                                                    fill="x",
                                                                                                    expand=True)
 
-        # Tekrarlayan İşlemler Listesi (Sağ Panelde)
         tekrar_eden_liste_frame = ttk.Frame(right_panel, padding="10 0 0 0")
         tekrar_eden_liste_frame.pack(pady=10, padx=0, fill="both", expand=True)
 
@@ -378,7 +641,6 @@ class GelirGiderUygulamasi:
 
         self.tekrar_eden_liste.bind("<<TreeviewSelect>>", self.tekrar_eden_liste_secildi)
 
-    # --- Ana İşlem Fonksiyonları ---
     def kaydet(self):
         """Yeni bir gelir veya gider işlemini veritabanına kaydeder."""
         tur = self.tur_var.get()
@@ -406,9 +668,9 @@ class GelirGiderUygulamasi:
 
         try:
             self.cursor.execute("""
-                                INSERT INTO islemler (tur, miktar, kategori, aciklama, tarih)
-                                VALUES (?, ?, ?, ?, ?)
-                                """, (tur, miktar, kategori, aciklama, tarih))
+                                INSERT INTO islemler (tur, miktar, kategori, aciklama, tarih, kullanici_id)
+                                VALUES (?, ?, ?, ?, ?, ?)
+                                """, (tur, miktar, kategori, aciklama, tarih, self.kullanici_id))
             self.conn.commit()
 
             messagebox.showinfo("Başarılı", "İşlem başarıyla kaydedildi.")
@@ -455,7 +717,8 @@ class GelirGiderUygulamasi:
                                     aciklama = ?,
                                     tarih    = ?
                                 WHERE id = ?
-                                """, (tur, miktar, kategori, aciklama, tarih, self.selected_item_id))
+                                  AND kullanici_id = ?
+                                """, (tur, miktar, kategori, aciklama, tarih, self.selected_item_id, self.kullanici_id))
             self.conn.commit()
             messagebox.showinfo("Başarılı", "Kayıt başarıyla güncellendi.")
             self.temizle()
@@ -471,13 +734,12 @@ class GelirGiderUygulamasi:
         tur = self.filtre_tur_var.get()
         kategori = self.filtre_kategori_var.get()
 
-        # Tarih alanlarının boş olup olmadığını kontrol et ve DateEntry'den doğru tarih formatını al
         bas_tarih = self.bas_tarih_entry.get_date().strftime("%Y-%m-%d") if self.bas_tarih_entry.get() else ""
         bit_tarih = self.bit_tarih_entry.get_date().strftime("%Y-%m-%d") if self.bit_tarih_entry.get() else ""
         arama_terimi = self.arama_entry.get().strip()
 
-        sql = "SELECT id, tur, miktar, kategori, aciklama, tarih FROM islemler WHERE 1=1"
-        params = []
+        sql = "SELECT id, tur, miktar, kategori, aciklama, tarih FROM islemler WHERE kullanici_id = ?"
+        params = [self.kullanici_id]
 
         if tur != "Tümü":
             sql += " AND tur = ?"
@@ -572,7 +834,8 @@ class GelirGiderUygulamasi:
         onay = messagebox.askyesno("Onay", "Seçili kaydı silmek istediğinize emin misiniz?")
         if onay:
             try:
-                self.cursor.execute("DELETE FROM islemler WHERE id = ?", (record_id,))
+                self.cursor.execute("DELETE FROM islemler WHERE id = ? AND kullanici_id = ?",
+                                    (record_id, self.kullanici_id))
                 self.conn.commit()
                 messagebox.showinfo("Başarılı", "Kayıt başarıyla silindi.")
                 self.listele()
@@ -585,15 +848,17 @@ class GelirGiderUygulamasi:
         self.cursor.execute("""
                             SELECT tur, kategori, SUM(miktar)
                             FROM islemler
+                            WHERE kullanici_id = ?
                             GROUP BY tur, kategori
-                            """)
+                            """, (self.kullanici_id,))
         kategori_verileri = self.cursor.fetchall()
 
         self.cursor.execute("""
                             SELECT tarih, tur, miktar
                             FROM islemler
+                            WHERE kullanici_id = ?
                             ORDER BY tarih ASC
-                            """)
+                            """, (self.kullanici_id,))
         zaman_verileri = self.cursor.fetchall()
 
         if not kategori_verileri and not zaman_verileri:
@@ -675,15 +940,12 @@ class GelirGiderUygulamasi:
         canvas.draw()
         canvas.get_tk_widget().pack(side="top", fill="both", expand=True)
 
-    # --- Tekrarlayan İşlem Fonksiyonları ---
-
     def kaydet_tekrar_eden(self):
         """Yeni bir tekrarlayan işlemi veritabanına kaydeder."""
         tur = self.tur_tekrar_var.get()
         miktar_str = self.miktar_tekrar_entry.get()
         kategori = self.kategori_tekrar_var.get()
         aciklama = self.aciklama_tekrar_entry.get()
-        # DEĞİŞİKLİK: DateEntry'den gelen tarih değişkeni 'baslangic_tarih_degeri' olarak adlandırıldı
         baslangic_tarih_degeri = self.baslangic_tarih_tekrar_entry.get_date().strftime("%Y-%m-%d")
         siklilik = self.siklilik_var.get()
 
@@ -700,17 +962,17 @@ class GelirGiderUygulamasi:
             messagebox.showerror("Hata", "Geçersiz miktar değeri. Lütfen sayı giriniz.")
             return
 
-        if not baslangic_tarih_degeri:  # Tarih boş kontrolü
+        if not baslangic_tarih_degeri:
             messagebox.showerror("Hata", "Lütfen geçerli bir başlangıç tarihi seçiniz.")
             return
 
         try:
             self.cursor.execute("""
                                 INSERT INTO tekrar_eden_islemler (tur, miktar, kategori, aciklama, baslangic_tarihi,
-                                                                  siklilik, son_uretilen_tarih)
-                                VALUES (?, ?, ?, ?, ?, ?, ?)
+                                                                  siklilik, son_uretilen_tarih, kullanici_id)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                                 """, (tur, miktar, kategori, aciklama, baslangic_tarih_degeri, siklilik,
-                                      baslangic_tarih_degeri))
+                                      baslangic_tarih_degeri, self.kullanici_id))
             self.conn.commit()
 
             messagebox.showinfo("Başarılı", "Tekrarlayan işlem başarıyla kaydedildi.")
@@ -734,7 +996,8 @@ class GelirGiderUygulamasi:
         onay = messagebox.askyesno("Onay", "Seçili tekrarlayan kaydı silmek istediğinize emin misiniz?")
         if onay:
             try:
-                self.cursor.execute("DELETE FROM tekrar_eden_islemler WHERE id = ?", (record_id,))
+                self.cursor.execute("DELETE FROM tekrar_eden_islemler WHERE id = ? AND kullanici_id = ?",
+                                    (record_id, self.kullanici_id))
                 self.conn.commit()
                 messagebox.showinfo("Başarılı", "Tekrarlayan kayıt başarıyla silindi.")
                 self.listele_tekrar_eden_islemler()
@@ -749,7 +1012,8 @@ class GelirGiderUygulamasi:
 
         try:
             self.cursor.execute(
-                "SELECT id, tur, miktar, kategori, aciklama, baslangic_tarihi, siklilik, son_uretilen_tarih FROM tekrar_eden_islemler ORDER BY baslangic_tarihi DESC")
+                "SELECT id, tur, miktar, kategori, aciklama, baslangic_tarihi, siklilik, son_uretilen_tarih FROM tekrar_eden_islemler WHERE kullanici_id = ? ORDER BY baslangic_tarihi DESC",
+                (self.kullanici_id,))
             veriler = self.cursor.fetchall()
             for veri in veriler:
                 self.tekrar_eden_liste.insert("", tk.END, values=veri)
@@ -771,7 +1035,6 @@ class GelirGiderUygulamasi:
             self.aciklama_tekrar_entry.delete(0, tk.END)
             self.aciklama_tekrar_entry.insert(0, values[4])
             try:
-                # DEĞİŞİKLİK: baslangic_tarihi sütunundan gelen değer kullanılacak
                 date_obj = datetime.strptime(values[5], "%Y-%m-%d").date()
                 self.baslangic_tarih_tekrar_entry.set_date(date_obj)
             except ValueError:
@@ -802,7 +1065,8 @@ class GelirGiderUygulamasi:
 
         try:
             self.cursor.execute(
-                "SELECT id, tur, miktar, kategori, aciklama, baslangic_tarihi, siklilik, son_uretilen_tarih FROM tekrar_eden_islemler")
+                "SELECT id, tur, miktar, kategori, aciklama, baslangic_tarihi, siklilik, son_uretilen_tarih FROM tekrar_eden_islemler WHERE kullanici_id = ?",
+                (self.kullanici_id,))
             tekrar_eden_kayitlar = self.cursor.fetchall()
 
             for kayit in tekrar_eden_kayitlar:
@@ -811,43 +1075,37 @@ class GelirGiderUygulamasi:
                 baslangic_tarih = datetime.strptime(baslangic_tarih_str, "%Y-%m-%d").date()
                 son_uretilen_tarih = datetime.strptime(son_uretilen_tarih_str, "%Y-%m-%d").date()
 
-                next_due_date = son_uretilen_tarih  # Başlangıçta son üretilen tarih
+                next_due_date = son_uretilen_tarih
 
-                # Eğer başlangıç tarihi son üretilen tarihten daha yeniyse, başlangıç tarihinden itibaren kontrol et
-                # Veya hiç üretilmemişse (son_uretilen_tarih başlangıç tarihi olarak ayarlanmışsa) başlangıç tarihinden başla
                 if baslangic_tarih > son_uretilen_tarih:
                     next_due_date = baslangic_tarih
 
-                # Tekrarlayan döngü: Bugün veya geçmişte kalan tüm vadesi gelen işlemleri üret
                 while next_due_date <= bugun:
-                    if next_due_date > son_uretilen_tarih:  # Sadece yeni üretilecekleri ele al
+                    if next_due_date > son_uretilen_tarih:
                         try:
                             self.cursor.execute("""
-                                                INSERT INTO islemler (tur, miktar, kategori, aciklama, tarih)
-                                                VALUES (?, ?, ?, ?, ?)
+                                                INSERT INTO islemler (tur, miktar, kategori, aciklama, tarih, kullanici_id)
+                                                VALUES (?, ?, ?, ?, ?, ?)
                                                 """,
-                                                (tur, miktar, kategori, aciklama, next_due_date.strftime("%Y-%m-%d")))
+                                                (tur, miktar, kategori, aciklama, next_due_date.strftime("%Y-%m-%d"),
+                                                 self.kullanici_id))
                             self.conn.commit()
                             uretilen_islem_sayisi += 1
                             uretilen_mesajlar.append(
                                 f"{tur} - {miktar:,.2f}₺ ({kategori}) tarihinde: {next_due_date.strftime('%Y-%m-%d')}")
                         except sqlite3.Error as e:
-                            print(f"Hata: Tekrarlayan işlem üretilemedi ({rec_id}): {e}")  # Konsola hata bas
-                            break  # Hata olursa bu kaydın döngüsünü durdur
+                            print(f"Hata: Tekrarlayan işlem üretilemedi ({rec_id}): {e}")
+                            break
 
-                    # Son üretilen tarihi güncelle
-                    # Her döngüde son_uretilen_tarih'i güncelleyerek bir sonraki kontrol noktasını belirliyoruz
                     self.cursor.execute("UPDATE tekrar_eden_islemler SET son_uretilen_tarih = ? WHERE id = ?",
                                         (next_due_date.strftime("%Y-%m-%d"), rec_id))
                     self.conn.commit()
 
-                    # Bir sonraki vade tarihini hesapla
                     if siklilik == "Günlük":
                         next_due_date += timedelta(days=1)
                     elif siklilik == "Haftalık":
                         next_due_date += timedelta(weeks=1)
                     elif siklilik == "Aylık":
-                        # Ay sonunu doğru işlemek için özel mantık
                         gun = next_due_date.day
                         ay = next_due_date.month + 1
                         yil = next_due_date.year
@@ -857,32 +1115,28 @@ class GelirGiderUygulamasi:
                         try:
                             next_due_date = next_due_date.replace(year=yil, month=ay)
                         except ValueError:
-                            # Ayın son günü yoksa (örn. 31 Şubat veya 31 Nisan)
-                            # Bir sonraki ayın ilk gününe git ve bir gün çıkar (o ayın son günü)
                             next_due_date = datetime(yil, ay, 1).date() - timedelta(days=1)
                     elif siklilik == "Yıllık":
                         next_due_date = next_due_date.replace(year=next_due_date.year + 1)
                     else:
-                        break  # Bilinmeyen sıklık, döngüyü kır
+                        break
 
         except sqlite3.Error as e:
             messagebox.showerror("Veritabanı Hatası", f"Tekrarlayan işlemler kontrol edilirken hata oluştu: {e}")
 
         if uretilen_islem_sayisi > 0:
             mesaj = f"Bugün {uretilen_islem_sayisi} adet tekrarlayan işlem otomatik olarak oluşturuldu:\n\n"
-            mesaj += "\n".join(uretilen_mesajlar[:10])  # İlk 10 işlemi göster
+            mesaj += "\n".join(uretilen_mesajlar[:10])
             if uretilen_islem_sayisi > 10:
                 mesaj += "\n..."
             messagebox.showinfo("Tekrarlayan İşlem Bildirimi", mesaj)
-            self.listele()  # Ana listeyi güncelle
+            self.listele()
 
     def __del__(self):
-        """Uygulama kapatıldığında veritabanı bağlantısını kapatır."""
-        if hasattr(self, 'conn') and self.conn:
-            self.conn.close()
+        pass
 
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = GelirGiderUygulamasi(root)
+    app = LoginRegisterApp(root)
     root.mainloop()

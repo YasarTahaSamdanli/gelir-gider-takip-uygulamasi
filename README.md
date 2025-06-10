@@ -34,6 +34,9 @@ Kullanıcıların finansal işlemlerini kolayca kaydetmelerini, filtrelemelerini
 ### Gelir & Gider Grafik Ekranı  
 ![Grafik Ekranı](https://github.com/YasarTahaSamdanli/gelir-gider-takip-uygulamasi/blob/ade8218a6b606473e1cd7dae3279ed66ad784a37/Grafik.png)
 
+### Kullanıcı Yönetimi & Güvenlik
+![Giriş Ekranı](https://github.com/YasarTahaSamdanli/Fingo/blob/f372a965a86b4b2f63b4dda22fe878afc748f27d/Giri%C5%9F-%C3%87%C4%B1k%C4%B1%C5%9F.png)
+
 ---
 
 ## 🛠️ Kullanılan Teknolojiler

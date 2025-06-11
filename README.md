@@ -10,7 +10,7 @@ Kullanıcıların finansal işlemlerini kolayca kaydetmelerini, filtrelemelerini
 - 📥 **İşlem Kaydı:** Gelir ve giderleri miktar, kategori, açıklama ve tarih bilgileriyle kaydetme  
 - ✏️ **İşlem Düzenleme/Silme:** Mevcut kayıtları seçip düzenleme veya silme  
 - 🔍 **Detaylı Filtreleme & Arama:** İşlem türüne, kategoriye, tarih aralığına veya açıklamaya göre filtreleme  
-- 📊 **Özet Bilgiler:** Toplam gelir, gider ve mevcut bakiye bilgileri  
+- 📊 **Özet Bilgiler:** Toplam gelir, gider ve mevcut bakiye bilgileri 
 - 🔁 **Tekrarlayan İşlemler Yönetimi:**
   - Düzenli gelir/giderleri bir kez tanımla
   - Günlük, haftalık, aylık, yıllık gibi sıklıklarla otomatik oluşturma

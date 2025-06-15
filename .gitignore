@@ -8,6 +8,7 @@ __pycache__/
 
 # C uzantıları
 *.so
+veriler.db
 
 # Dağıtım / Paketleme
 .Python

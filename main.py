@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 import sqlite3
 from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
@@ -9,8 +9,21 @@ import bcrypt
 import re
 import time
 
+import pandas as pd
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER, TA_RIGHT
+from reportlab.lib import colors
+
+# YENİ EKLENENLER: ReportLab için Türkçe font desteği
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+import os
+import sys  # PyInstaller için
+
 # Matplotlib için Türkçe font ayarı (isteğe bağlı, sistemde yüklü bir font olmalı)
-plt.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans']
+plt.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans']  # Matplotlib için ayrı
 plt.rcParams['axes.unicode_minus'] = False
 
 
@@ -39,7 +52,7 @@ class LoginRegisterApp:
 
         self.conn = None
         self.cursor = None
-        self.baglanti_olustur()  # Veritabanı bağlantısı ve tabloları oluştur
+        self.baglanti_olustur()
 
         self.current_frame = None
         self.show_login_screen()
@@ -50,7 +63,7 @@ class LoginRegisterApp:
             self.conn = sqlite3.connect("veriler.db")
             self.cursor = self.conn.cursor()
 
-            # 1. users tablosunu oluştur (ilk ve en önemli tablo)
+            # 1. users tablosunu oluştur
             self.cursor.execute("""
                                 CREATE TABLE IF NOT EXISTS users
                                 (
@@ -74,6 +87,31 @@ class LoginRegisterApp:
                                     0,
                                     lockout_until
                                     TEXT
+                                )
+                                """)
+
+            # YENİ: categories tablosu
+            self.cursor.execute("""
+                                CREATE TABLE IF NOT EXISTS categories
+                                (
+                                    id
+                                    INTEGER
+                                    PRIMARY
+                                    KEY
+                                    AUTOINCREMENT,
+                                    kategori_adi
+                                    TEXT
+                                    NOT
+                                    NULL
+                                    UNIQUE,
+                                    tur
+                                    TEXT
+                                    NOT
+                                    NULL,
+                                    kullanici_id
+                                    INTEGER
+                                    NOT
+                                    NULL
                                 )
                                 """)
 
@@ -148,9 +186,6 @@ class LoginRegisterApp:
                                 """)
 
             # 4. Mevcut tablolara yeni sütun ekleme (sadece tablo zaten VARSA ve sütun YOKSA)
-            # PRAGMA table_info kullanarak sütunun varlığını kontrol et
-
-            # islemler tablosu için kullanici_id sütunu kontrolü
             self.cursor.execute("PRAGMA table_info(islemler);")
             cols = [col[1] for col in self.cursor.fetchall()]
             if 'kullanici_id' not in cols:
@@ -158,12 +193,9 @@ class LoginRegisterApp:
                     self.cursor.execute("ALTER TABLE islemler ADD COLUMN kullanici_id INTEGER DEFAULT 0 NOT NULL")
                     print("islemler tablosuna kullanici_id sütunu eklendi (eski veritabanı için).")
                 except sqlite3.Error as e:
-                    # Bu hata genellikle sütun zaten varsa oluşur, bu durumda yoksayabiliriz.
-                    # Diğer ciddi hataları hala yakalarız.
                     if "duplicate column name: kullanici_id" not in str(e):
                         raise e
 
-            # tekrar_eden_islemler tablosu için kullanici_id sütunu kontrolü
             self.cursor.execute("PRAGMA table_info(tekrar_eden_islemler);")
             cols = [col[1] for col in self.cursor.fetchall()]
             if 'kullanici_id' not in cols:
@@ -378,11 +410,42 @@ class GelirGiderUygulamasi:
 
         self.selected_item_id = None
         self.selected_recurring_item_id = None
+        self.selected_category_id = None
+
+        # YENİ: Font Yolu ve Kaydı
+        self.font_name = "Arial"  # İsim olarak Arial kullandık. Font dosyasının adı Arial.ttf olmalı.
+        # Uygulama PyInstaller ile paketlendiğinde, ana script'in çalıştığı dizin değişebilir.
+        # sys._MEIPASS, PyInstaller'ın geçici dizinidir.
+        # Normal çalıştırmada os.path.dirname(__file__) kullanılır.
+        font_file_name = "Arial.ttf"  # Font dosyanızın adı
+
+        # PyInstaller kontrolü ile doğru font yolunu bul
+        if hasattr(sys, '_MEIPASS'):
+            self.font_path = os.path.join(sys._MEIPASS, font_file_name)
+        else:
+            self.font_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), font_file_name)
+
+        try:
+            # Fontu ReportLab'a kaydet
+            pdfmetrics.registerFont(TTFont(self.font_name, self.font_path))
+            # Font ailesini kaydet (normal, bold, italic vb. stiller için aynı fontu kullanmasını söyleriz)
+            pdfmetrics.registerFontFamily(self.font_name,
+                                          normal=self.font_name,
+                                          bold=self.font_name,
+                                          italic=self.font_name,
+                                          boldItalic=self.font_name)
+            print(f"Font '{self.font_name}' başarıyla yüklendi: {self.font_path}")
+        except Exception as e:
+            print(
+                f"Hata: Font yüklenemedi. PDF'de Türkçe karakter sorunları olabilir: {e}. Lütfen '{font_file_name}' dosyasının uygulamanızın bulunduğu dizinde olduğundan emin olun.")
+            # Font yüklenemezse varsayılan fonta geri dön (Türkçe karakterler için sorun devam edebilir)
+            self.font_name = "Helvetica"
 
         self.arayuz_olustur()
 
         self.listele()
         self.listele_tekrar_eden_islemler()
+        self.kategorileri_yukle()
 
         self.uretim_kontrolu()
 
@@ -421,9 +484,7 @@ class GelirGiderUygulamasi:
         input_widgets = [
             ("İşlem Türü:", "tur_var", ["Gelir", "Gider"], "Combobox"),
             ("Miktar (₺):", "miktar_entry", None, "Entry"),
-            ("Kategori:", "kategori_var", ["Maaş", "Yatırım", "Hediye", "Diğer",
-                                           "Fatura", "Gıda", "Ulaşım", "Eğlence", "Sağlık", "Eğitim", "Giyim"],
-             "Combobox"),
+            ("Kategori:", "kategori_var", [], "Combobox"),
             ("Açıklama:", "aciklama_entry", None, "Entry"),
             ("Tarih:", "tarih_entry", None, "DateEntry")
         ]
@@ -435,8 +496,9 @@ class GelirGiderUygulamasi:
                 var = tk.StringVar()
                 cb = ttk.Combobox(giris_frame, textvariable=var, values=values, state="readonly", width=30)
                 cb.grid(row=i, column=1, padx=10, pady=5, sticky="ew")
-                cb.set(values[0] if values else "")
                 setattr(self, var_name, var)
+                if var_name == "kategori_var":
+                    self.kategori_combobox = cb
             elif widget_type == "Entry":
                 entry = ttk.Entry(giris_frame, width=35)
                 entry.grid(row=i, column=1, padx=10, pady=5, sticky="ew")
@@ -459,6 +521,8 @@ class GelirGiderUygulamasi:
         ttk.Button(buton_frame, text="Sil", command=self.sil).pack(side="left", padx=5, fill="x", expand=True)
         ttk.Button(buton_frame, text="Grafik Göster", command=self.grafik_goster).pack(side="left", padx=5, fill="x",
                                                                                        expand=True)
+        ttk.Button(buton_frame, text="Rapor Oluştur", command=self.rapor_olustur).pack(side="left", padx=5, fill="x",
+                                                                                       expand=True)
 
         filtre_frame = ttk.LabelFrame(left_panel, text="Filtreleme ve Arama", padding=15)
         filtre_frame.pack(pady=10, padx=0, fill="x")
@@ -471,13 +535,9 @@ class GelirGiderUygulamasi:
 
         ttk.Label(filtre_frame, text="Kategori:").grid(row=0, column=2, padx=5, pady=5, sticky="w")
         self.filtre_kategori_var = tk.StringVar(value="Tümü")
-        ttk.Combobox(filtre_frame, textvariable=self.filtre_kategori_var,
-                     values=["Tümü", "Maaş", "Yatırım", "Hediye", "Diğer",
-                             "Fatura", "Gıda", "Ulaşım", "Eğlence", "Sağlık", "Eğitim", "Giyim"], width=12).grid(row=0,
-                                                                                                                 column=3,
-                                                                                                                 padx=5,
-                                                                                                                 pady=5,
-                                                                                                                 sticky="ew")
+        self.filtre_kategori_combobox = ttk.Combobox(filtre_frame, textvariable=self.filtre_kategori_var,
+                                                     values=["Tümü"], width=12)
+        self.filtre_kategori_combobox.grid(row=0, column=3, padx=5, pady=5, sticky="ew")
 
         ttk.Label(filtre_frame, text="Açıklama/Arama:").grid(row=0, column=4, padx=5, pady=5, sticky="w")
         self.arama_entry = ttk.Entry(filtre_frame, width=20)
@@ -553,29 +613,29 @@ class GelirGiderUygulamasi:
                                       font=("Arial", 11, "bold"))
         self.bakiye_label.pack(side="left", padx=20, fill="x", expand=True)
 
+        # --- Tekrarlayan İşlemler Paneli (Sağ Panelde) ---
         tekrar_eden_frame = ttk.LabelFrame(right_panel, text="Tekrarlayan İşlemler Tanımla", padding=15)
         tekrar_eden_frame.pack(pady=10, padx=0, fill="x")
 
         recurring_input_widgets = [
             ("İşlem Türü:", "tur_tekrar_var", ["Gelir", "Gider"], "Combobox"),
             ("Miktar (₺):", "miktar_tekrar_entry", None, "Entry"),
-            ("Kategori:", "kategori_tekrar_var", ["Maaş", "Yatırım", "Hediye", "Diğer",
-                                                  "Fatura", "Gıda", "Ulaşım", "Eğlence", "Sağlık", "Eğitim", "Giyim"],
-             "Combobox"),
+            ("Kategori:", "kategori_tekrar_var", [], "Combobox"),
             ("Açıklama:", "aciklama_tekrar_entry", None, "Entry"),
             ("Başlangıç Tarihi:", "baslangic_tarih_tekrar_entry", None, "DateEntry"),
             ("Sıklık:", "siklilik_var", ["Günlük", "Haftalık", "Aylık", "Yıllık"], "Combobox")
         ]
 
         for i, (label_text, var_name, values, widget_type) in enumerate(recurring_input_widgets):
-            ttk.Label(tekrar_eden_frame, text=label_text).grid(row=i, column=0, sticky="w", padx=10, pady=5)
+            ttk.Label(tekrar_eden_frame, text=label_text).grid(row=i, column=0, padx=10, pady=5, sticky="w")
 
             if widget_type == "Combobox":
                 var = tk.StringVar()
                 cb = ttk.Combobox(tekrar_eden_frame, textvariable=var, values=values, state="readonly", width=30)
                 cb.grid(row=i, column=1, padx=10, pady=5, sticky="ew")
-                cb.set(values[0] if values else "")
                 setattr(self, var_name, var)
+                if var_name == "kategori_tekrar_var":
+                    self.kategori_tekrar_combobox = cb
             elif widget_type == "Entry":
                 entry = ttk.Entry(tekrar_eden_frame, width=35)
                 entry.grid(row=i, column=1, padx=10, pady=5, sticky="ew")
@@ -600,6 +660,45 @@ class GelirGiderUygulamasi:
         ttk.Button(tekrar_eden_buton_frame, text="Temizle", command=self.temizle_tekrar_eden).pack(side="left", padx=5,
                                                                                                    fill="x",
                                                                                                    expand=True)
+
+        # --- Kategori Yönetimi Paneli (Sağ Panelde, Tekrarlayan İşlemlerin Altında) ---
+        kategori_yonetim_frame = ttk.LabelFrame(right_panel, text="Kategori Yönetimi", padding=15)
+        kategori_yonetim_frame.pack(pady=10, padx=0, fill="both", expand=True)
+
+        ttk.Label(kategori_yonetim_frame, text="Kategori Adı:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
+        self.kategori_adi_entry = ttk.Entry(kategori_yonetim_frame, width=30)
+        self.kategori_adi_entry.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+
+        ttk.Label(kategori_yonetim_frame, text="Kategori Türü:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
+        self.kategori_tur_var = tk.StringVar()
+        self.kategori_tur_combobox = ttk.Combobox(kategori_yonetim_frame, textvariable=self.kategori_tur_var,
+                                                  values=["Gelir", "Gider", "Genel"], state="readonly", width=28)
+        self.kategori_tur_combobox.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
+        self.kategori_tur_var.set("Genel")
+
+        kategori_yonetim_frame.grid_columnconfigure(1, weight=1)
+
+        kategori_buton_frame = ttk.Frame(kategori_yonetim_frame, padding="10 0 0 0")
+        kategori_buton_frame.grid(row=2, column=0, columnspan=2, pady=10, sticky="ew")
+        ttk.Button(kategori_buton_frame, text="Kategori Ekle", command=self.kategori_ekle).pack(side="left", padx=5,
+                                                                                                fill="x", expand=True)
+        ttk.Button(kategori_buton_frame, text="Kategori Sil", command=self.kategori_sil).pack(side="left", padx=5,
+                                                                                              fill="x", expand=True)
+        ttk.Button(kategori_buton_frame, text="Temizle", command=self.temizle_kategori).pack(side="left", padx=5,
+                                                                                             fill="x", expand=True)
+
+        self.kategori_liste = ttk.Treeview(kategori_yonetim_frame, columns=("id", "Kategori Adı", "Tür"),
+                                           show="headings")
+        self.kategori_liste.heading("id", text="ID", anchor="w")
+        self.kategori_liste.column("id", width=30, minwidth=20, stretch=tk.NO)
+        self.kategori_liste.heading("Kategori Adı", text="Kategori Adı", anchor="w")
+        self.kategori_liste.column("Kategori Adı", width=150, minwidth=100)
+        self.kategori_liste.heading("Tür", text="Tür", anchor="w")
+        self.kategori_liste.column("Tür", width=80, minwidth=60, stretch=tk.NO)
+        self.kategori_liste.grid(row=3, column=0, columnspan=2, sticky="nsew", padx=5, pady=5)
+        self.kategori_liste.bind("<<TreeviewSelect>>", self.kategori_liste_secildi)
+
+        kategori_yonetim_frame.grid_rowconfigure(3, weight=1)
 
         tekrar_eden_liste_frame = ttk.Frame(right_panel, padding="10 0 0 0")
         tekrar_eden_liste_frame.pack(pady=10, padx=0, fill="both", expand=True)
@@ -641,8 +740,8 @@ class GelirGiderUygulamasi:
 
         self.tekrar_eden_liste.bind("<<TreeviewSelect>>", self.tekrar_eden_liste_secildi)
 
+    # --- Ana İşlem Fonksiyonları ---
     def kaydet(self):
-        """Yeni bir gelir veya gider işlemini veritabanına kaydeder."""
         tur = self.tur_var.get()
         miktar_str = self.miktar_entry.get()
         kategori = self.kategori_var.get()
@@ -660,6 +759,10 @@ class GelirGiderUygulamasi:
                 return
         except ValueError:
             messagebox.showerror("Hata", "Geçersiz miktar değeri. Lütfen sayı giriniz.")
+            return
+
+        if not kategori or kategori == "Kategori Seçin":
+            messagebox.showerror("Hata", "Lütfen bir kategori seçiniz.")
             return
 
         if not tarih:
@@ -680,7 +783,6 @@ class GelirGiderUygulamasi:
             messagebox.showerror("Hata", f"Veritabanına kaydetme hatası: {e}")
 
     def guncelle(self):
-        """Seçili gelir veya gider işlemini veritabanında günceller."""
         if self.selected_item_id is None:
             messagebox.showwarning("Uyarı", "Lütfen güncellemek istediğiniz kaydı seçiniz.")
             return
@@ -702,6 +804,10 @@ class GelirGiderUygulamasi:
                 return
         except ValueError:
             messagebox.showerror("Hata", "Geçersiz miktar değeri. Lütfen sayı giriniz.")
+            return
+
+        if not kategori or kategori == "Kategori Seçin":
+            messagebox.showerror("Hata", "Lütfen bir kategori seçiniz.")
             return
 
         if not tarih:
@@ -727,7 +833,6 @@ class GelirGiderUygulamasi:
             messagebox.showerror("Hata", f"Veritabanı güncelleme hatası: {e}")
 
     def listele(self, event=None):
-        """Veritabanındaki işlemleri filtreleyerek Treeview'da listeler ve özeti günceller."""
         for row in self.liste.get_children():
             self.liste.delete(row)
 
@@ -789,7 +894,6 @@ class GelirGiderUygulamasi:
                                  foreground="blue" if bakiye >= 0 else "red")
 
     def liste_secildi(self, event):
-        """Ana işlem Treeview'da bir öğe seçildiğinde giriş alanlarını doldurur."""
         selected_items = self.liste.selection()
         if selected_items:
             selected_item = selected_items[0]
@@ -812,16 +916,14 @@ class GelirGiderUygulamasi:
             self.temizle()
 
     def temizle(self):
-        """Ana işlem giriş alanlarını varsayılan değerlere sıfırlar."""
         self.tur_var.set("Gelir")
         self.miktar_entry.delete(0, tk.END)
-        self.kategori_var.set("Diğer")
+        self.kategori_var.set("Kategori Seçin")
         self.aciklama_entry.delete(0, tk.END)
         self.tarih_entry.set_date(datetime.now().date())
         self.selected_item_id = None
 
     def sil(self):
-        """Seçili ana kaydı veritabanından siler."""
         selected_items = self.liste.selection()
         if not selected_items:
             messagebox.showwarning("Uyarı", "Lütfen silmek istediğiniz kaydı seçiniz.")
@@ -844,7 +946,6 @@ class GelirGiderUygulamasi:
                 messagebox.showerror("Hata", f"Kayıt silme hatası: {e}")
 
     def grafik_goster(self):
-        """Kategorilere göre gelir/gider dağılımını ve zaman içindeki bakiye değişimini gösterir."""
         self.cursor.execute("""
                             SELECT tur, kategori, SUM(miktar)
                             FROM islemler
@@ -940,8 +1041,9 @@ class GelirGiderUygulamasi:
         canvas.draw()
         canvas.get_tk_widget().pack(side="top", fill="both", expand=True)
 
+    # --- Tekrarlayan İşlem Fonksiyonları ---
+
     def kaydet_tekrar_eden(self):
-        """Yeni bir tekrarlayan işlemi veritabanına kaydeder."""
         tur = self.tur_tekrar_var.get()
         miktar_str = self.miktar_tekrar_entry.get()
         kategori = self.kategori_tekrar_var.get()
@@ -960,6 +1062,10 @@ class GelirGiderUygulamasi:
                 return
         except ValueError:
             messagebox.showerror("Hata", "Geçersiz miktar değeri. Lütfen sayı giriniz.")
+            return
+
+        if not kategori or kategori == "Kategori Seçin":
+            messagebox.showerror("Hata", "Lütfen bir kategori seçiniz.")
             return
 
         if not baslangic_tarih_degeri:
@@ -983,7 +1089,6 @@ class GelirGiderUygulamasi:
             messagebox.showerror("Hata", f"Tekrarlayan işlem kaydetme hatası: {e}")
 
     def sil_tekrar_eden(self):
-        """Seçili tekrarlayan işlemi veritabanından siler."""
         selected_items = self.tekrar_eden_liste.selection()
         if not selected_items:
             messagebox.showwarning("Uyarı", "Lütfen silmek istediğiniz tekrarlayan kaydı seçiniz.")
@@ -1006,7 +1111,6 @@ class GelirGiderUygulamasi:
                 messagebox.showerror("Hata", f"Tekrarlayan kayıt silme hatası: {e}")
 
     def listele_tekrar_eden_islemler(self):
-        """Veritabanındaki tekrarlayan işlemleri Treeview'da listeler."""
         for row in self.tekrar_eden_liste.get_children():
             self.tekrar_eden_liste.delete(row)
 
@@ -1021,7 +1125,6 @@ class GelirGiderUygulamasi:
             messagebox.showerror("Veritabanı Hatası", f"Tekrarlayan veri çekme hatası: {e}")
 
     def tekrar_eden_liste_secildi(self, event):
-        """Tekrarlayan işlemler Treeview'da bir öğe seçildiğinde giriş alanlarını doldurur."""
         selected_items = self.tekrar_eden_liste.selection()
         if selected_items:
             selected_item = selected_items[0]
@@ -1045,20 +1148,15 @@ class GelirGiderUygulamasi:
             self.temizle_tekrar_eden()
 
     def temizle_tekrar_eden(self):
-        """Tekrarlayan işlem giriş alanlarını varsayılan değerlere sıfırlar."""
         self.tur_tekrar_var.set("Gelir")
         self.miktar_tekrar_entry.delete(0, tk.END)
-        self.kategori_tekrar_var.set("Diğer")
+        self.kategori_tekrar_var.set("Kategori Seçin")
         self.aciklama_tekrar_entry.delete(0, tk.END)
         self.baslangic_tarih_tekrar_entry.set_date(datetime.now().date())
-        self.siklilik_var.set("Aylık")  # Varsayılan olarak aylık
+        self.siklilik_var.set("Aylık")
         self.selected_recurring_item_id = None
 
     def uretim_kontrolu(self):
-        """
-        Tekrarlayan işlemleri kontrol eder ve vadesi gelenleri ana işlemlere ekler.
-        Uygulama başlatıldığında veya tekrarlayan işlem eklendiğinde/silindiğinde çağrılır.
-        """
         bugun = datetime.now().date()
         uretilen_islem_sayisi = 0
         uretilen_mesajlar = []
@@ -1135,8 +1233,327 @@ class GelirGiderUygulamasi:
     def __del__(self):
         pass
 
+        # --- Kategori Yönetimi Fonksiyonları ---
 
+    def kategorileri_yukle(self):
+        for row in self.kategori_liste.get_children():
+            self.kategori_liste.delete(row)
+
+        try:
+            self.cursor.execute(
+                "SELECT id, kategori_adi, tur FROM categories WHERE kullanici_id = ? ORDER BY kategori_adi ASC",
+                (self.kullanici_id,))
+            kategoriler = self.cursor.fetchall()
+
+            kategori_adlari = ["Kategori Seçin"]
+            filtre_kategori_adlari = ["Tümü"]
+
+            for kategori in kategoriler:
+                self.kategori_liste.insert("", tk.END, values=kategori)
+                kategori_adlari.append(kategori[1])
+                filtre_kategori_adlari.append(kategori[1])
+
+            self.kategori_combobox['values'] = kategori_adlari
+            self.kategori_combobox.set("Kategori Seçin")
+
+            self.kategori_tekrar_combobox['values'] = kategori_adlari
+            self.kategori_tekrar_combobox.set("Kategori Seçin")
+
+            self.filtre_kategori_combobox['values'] = filtre_kategori_adlari
+            self.filtre_kategori_combobox.set("Tümü")
+
+
+        except sqlite3.Error as e:
+            messagebox.showerror("Veritabanı Hatası", f"Kategoriler yüklenirken hata oluştu: {e}")
+
+    def kategori_ekle(self):
+        kategori_adi = self.kategori_adi_entry.get().strip()
+        kategori_tur = self.kategori_tur_var.get()
+
+        if not kategori_adi:
+            messagebox.showerror("Hata", "Kategori adı boş bırakılamaz.")
+            return
+        if not kategori_tur:
+            messagebox.showerror("Hata", "Kategori türü seçilmelidir.")
+            return
+
+        try:
+            self.cursor.execute("INSERT INTO categories (kategori_adi, tur, kullanici_id) VALUES (?, ?, ?)",
+                                (kategori_adi, kategori_tur, self.kullanici_id))
+            self.conn.commit()
+            messagebox.showinfo("Başarılı", "Kategori başarıyla eklendi.")
+            self.temizle_kategori()
+            self.kategorileri_yukle()
+        except sqlite3.IntegrityError:
+            messagebox.showerror("Hata", "Bu kategori adı zaten mevcut.")
+        except sqlite3.Error as e:
+            messagebox.showerror("Hata", f"Kategori eklenirken hata oluştu: {e}")
+
+    def kategori_sil(self):
+        selected_items = self.kategori_liste.selection()
+        if not selected_items:
+            messagebox.showwarning("Uyarı", "Lütfen silmek istediğiniz kategoriyi seçiniz.")
+            return
+
+        selected_item = selected_items[0]
+        values = self.kategori_liste.item(selected_item, "values")
+        category_id = values[0]
+        kategori_adi = values[1]
+
+        self.cursor.execute("SELECT COUNT(*) FROM islemler WHERE kategori = ? AND kullanici_id = ?",
+                            (kategori_adi, self.kullanici_id))
+        islem_sayisi = self.cursor.fetchone()[0]
+
+        if islem_sayisi > 0:
+            onay = messagebox.askyesno("Uyarı",
+                                       f"'{kategori_adi}' kategorisi {islem_sayisi} adet işlemde kullanılmaktadır. Bu kategoriyi silerseniz, bu işlemlerin kategori bilgisi boş kalacaktır. Emin misiniz?")
+        else:
+            onay = messagebox.askyesno("Onay", f"'{kategori_adi}' kategorisini silmek istediğinize emin misiniz?")
+
+        if onay:
+            try:
+                self.cursor.execute("UPDATE islemler SET kategori = NULL WHERE kategori = ? AND kullanici_id = ?",
+                                    (kategori_adi, self.kullanici_id))
+                self.cursor.execute(
+                    "UPDATE tekrar_eden_islemler SET kategori = NULL WHERE kategori = ? AND kullanici_id = ?",
+                    (kategori_adi, self.kullanici_id))
+
+                self.cursor.execute("DELETE FROM categories WHERE id = ? AND kullanici_id = ?",
+                                    (category_id, self.kullanici_id))
+                self.conn.commit()
+                messagebox.showinfo("Başarılı", "Kategori başarıyla silindi.")
+                self.temizle_kategori()
+                self.kategorileri_yukle()
+                self.listele()
+            except sqlite3.Error as e:
+                messagebox.showerror("Hata", f"Kategori silinirken hata oluştu: {e}")
+
+    def kategori_liste_secildi(self, event):
+        selected_items = self.kategori_liste.selection()
+        if selected_items:
+            selected_item = selected_items[0]
+            values = self.kategori_liste.item(selected_item, "values")
+            self.selected_category_id = values[0]
+
+            self.kategori_adi_entry.delete(0, tk.END)
+            self.kategori_adi_entry.insert(0, values[1])
+            self.kategori_tur_var.set(values[2])
+        else:
+            self.selected_category_id = None
+            self.temizle_kategori()
+
+    def temizle_kategori(self):
+        self.kategori_adi_entry.delete(0, tk.END)
+        self.kategori_tur_var.set("Genel")
+        self.selected_category_id = None
+
+    # --- Raporlama Fonksiyonları ---
+    def rapor_olustur(self):
+        tur = self.filtre_tur_var.get()
+        kategori = self.filtre_kategori_var.get()
+        bas_tarih = self.bas_tarih_entry.get_date().strftime("%Y-%m-%d") if self.bas_tarih_entry.get() else ""
+        bit_tarih = self.bit_tarih_entry.get_date().strftime("%Y-%m-%d") if self.bit_tarih_entry.get() else ""
+        arama_terimi = self.arama_entry.get().strip()
+
+        sql = "SELECT id, tur, miktar, kategori, aciklama, tarih FROM islemler WHERE kullanici_id = ?"
+        params = [self.kullanici_id]
+
+        if tur != "Tümü":
+            sql += " AND tur = ?"
+            params.append(tur)
+
+        if kategori != "Tümü":
+            sql += " AND kategori = ?"
+            params.append(kategori)
+
+        if bas_tarih:
+            sql += " AND tarih >= ?"
+            params.append(bas_tarih)
+
+        if bit_tarih:
+            sql += " AND tarih <= ?"
+            params.append(bit_tarih)
+
+        if arama_terimi:
+            sql += " AND (aciklama LIKE ? OR kategori LIKE ?)"
+            params.append(f"%{arama_terimi}%")
+            params.append(f"%{arama_terimi}%")
+
+        sql += " ORDER BY tarih DESC, id DESC"
+
+        try:
+            self.cursor.execute(sql, params)
+            rapor_verileri = self.cursor.fetchall()
+        except sqlite3.Error as e:
+            messagebox.showerror("Veritabanı Hatası", f"Rapor verileri çekilirken hata oluştu: {e}")
+            return
+
+        if not rapor_verileri:
+            messagebox.showinfo("Bilgi", "Seçilen kriterlere göre rapor oluşturulacak veri bulunamadı.")
+            return
+
+        rapor_secenekleri_pencere = tk.Toplevel(self.root)
+        rapor_secenekleri_pencere.title("Rapor Kaydet")
+        rapor_secenekleri_pencere.geometry("300x150")
+        rapor_secenekleri_pencere.transient(self.root)
+        rapor_secenekleri_pencere.grab_set()
+
+        ttk.Label(rapor_secenekleri_pencere, text="Raporu hangi formatta kaydetmek istersiniz?").pack(pady=10)
+
+        ttk.Button(rapor_secenekleri_pencere, text="Excel Olarak Kaydet",
+                   command=lambda: self._excel_rapor_olustur(rapor_verileri, rapor_secenekleri_pencere)).pack(pady=5)
+
+        ttk.Button(rapor_secenekleri_pencere, text="PDF Olarak Kaydet",
+                   command=lambda: self._pdf_rapor_olustur(rapor_verileri, rapor_secenekleri_pencere)).pack(pady=5)
+
+    def _excel_rapor_olustur(self, data, parent_window):
+        parent_window.destroy()
+
+        if not data:
+            messagebox.showwarning("Uyarı", "Excel raporu oluşturulacak veri bulunamadı.")
+            return
+
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".xlsx",
+            filetypes=[("Excel Dosyaları", "*.xlsx")],
+            title="Excel Raporu Kaydet"
+        )
+        if not file_path:
+            return
+
+        try:
+            df = pd.DataFrame(data, columns=["ID", "Tür", "Miktar", "Kategori", "Açıklama", "Tarih"])
+            df.to_excel(file_path, index=False)
+            messagebox.showinfo("Başarılı", f"Excel raporu başarıyla kaydedildi:\n{file_path}")
+        except Exception as e:
+            messagebox.showerror("Hata", f"Excel raporu oluşturulurken hata oluştu: {e}")
+
+    def _pdf_rapor_olustur(self, data, parent_window, ):
+        parent_window.destroy()
+
+        if not data:
+            messagebox.showwarning("Uyarı", "PDF raporu oluşturulacak veri bulunamadı.")
+            return
+
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".pdf",
+            filetypes=[("PDF Dosyaları", "*.pdf")],
+            title="PDF Raporu Kaydet"
+        )
+        if not file_path:
+            return
+
+        try:
+            doc = SimpleDocTemplate(file_path, pagesize=letter)
+            styles = getSampleStyleSheet()
+
+            # Başlık Stilleri (FontName güncellendi)
+            title_style = ParagraphStyle(
+                'TitleStyle',
+                parent=styles['h1'],
+                fontName=self.font_name,
+                fontSize=20,
+                spaceAfter=14,
+                alignment=TA_CENTER
+            )
+            heading_style = ParagraphStyle(
+                'HeadingStyle',
+                parent=styles['h2'],
+                fontName=self.font_name,
+                fontSize=14,
+                spaceAfter=10,
+                alignment=TA_CENTER
+            )
+            # Normal metinler için ayrı bir ParagraphStyle oluşturup fontu belirtiyoruz
+            normal_style = ParagraphStyle(
+                'NormalStyle',
+                parent=styles['Normal'],
+                fontName=self.font_name,
+                fontSize=10,
+                leading=12
+            )
+
+            elements = []
+
+            elements.append(Paragraph("Gelir-Gider Uygulaması Raporu", title_style))
+            elements.append(Spacer(1, 0.2 * 10 * 6))
+
+            # Filtre Bilgileri (normal_style kullanıldı)
+            filtre_bilgisi = f"<b>Rapor Tarihi:</b> {datetime.now().strftime('%Y-%m-%d %H:%M')}<br/>" \
+                             f"<b>Kullanıcı:</b> {self.username}<br/>" \
+                             f"<b>Filtreler:</b> Tür: {self.filtre_tur_var.get()}, Kategori: {self.filtre_kategori_var.get()}<br/>" \
+                             f"Tarih Aralığı: {self.bas_tarih_entry.get_date().strftime('%Y-%m-%d')} - {self.bit_tarih_entry.get_date().strftime('%Y-%m-%d')}<br/>" \
+                             f"Arama Terimi: {self.arama_entry.get().strip() or 'Yok'}"
+            elements.append(Paragraph(filtre_bilgisi, normal_style))  # Normal stili kullan
+            elements.append(Spacer(1, 0.2 * 10 * 6))
+
+            table_data = [["ID", "Tür", "Miktar (₺)", "Kategori", "Açıklama", "Tarih"]]
+            total_gelir = 0
+            total_gider = 0
+
+            for row in data:
+                # Tablo hücrelerindeki Türkçe karakterlerin doğru gösterilmesi için
+                # Her bir elemanı Paragraph olarak tanımlayabiliriz.
+                # Ancak ReportLab'ın Table objesi doğrudan stringleri de kabul eder.
+                # Eğer font TableStyle'da doğru tanımlanmışsa, stringler de çalışmalı.
+                table_data.append([
+                    Paragraph(str(row[0]), normal_style),
+                    Paragraph(row[1], normal_style),
+                    Paragraph(f"{row[2]:,.2f}", normal_style),
+                    Paragraph(row[3] if row[3] else '', normal_style),  # None gelme ihtimaline karşı
+                    Paragraph(row[4] if row[4] else '', normal_style),
+                    Paragraph(row[5], normal_style)
+                ])
+                if row[1] == "Gelir":
+                    total_gelir += row[2]
+                else:
+                    total_gider += row[2]
+
+            table_style = TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#D0D0D0")),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('FONTNAME', (0, 0), (-1, 0), self.font_name),  # Başlık fontu
+                ('FONTSIZE', (0, 0), (-1, 0), 10),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor("#F5F5F5")),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                ('LEFTPADDING', (0, 0), (-1, -1), 4),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+                ('TOPPADDING', (0, 0), (-1, -1), 4),
+                ('FONTNAME', (0, 1), (-1, -1), self.font_name),  # Hücre fontu
+                ('FONTSIZE', (0, 1), (-1, -1), 9),
+            ])
+
+            col_widths = [0.05 * letter[0], 0.08 * letter[0], 0.12 * letter[0], 0.15 * letter[0], 0.45 * letter[0],
+                          0.15 * letter[0]]
+
+            table_style.add('ALIGN', (2, 0), (2, -1), 'RIGHT')
+
+            table = Table(table_data, colWidths=col_widths)
+            table.setStyle(table_style)
+            elements.append(table)
+            elements.append(Spacer(1, 0.2 * 10 * 6))
+
+            elements.append(
+                Paragraph(f"<b>Toplam Gelir:</b> <font color='green'>₺{total_gelir:,.2f}</font>", normal_style))
+            elements.append(
+                Paragraph(f"<b>Toplam Gider:</b> <font color='red'>₺{total_gider:,.2f}</font>", normal_style))
+            elements.append(
+                Paragraph(f"<b>Bakiye:</b> <font color='blue'>₺{total_gelir - total_gider:,.2f}</font>", normal_style))
+
+            doc.build(elements)
+            messagebox.showinfo("Başarılı", f"PDF raporu başarıyla kaydedildi:\n{file_path}")
+        except Exception as e:
+            messagebox.showerror("Hata",
+                                 f"PDF raporu oluşturulurken hata oluştu: {e}\nPDF kütüphanesi Türkçe karakter desteği için ek font ayarları gerektirebilir. Lütfen font file dosyasının uygulamanızın bulunduğu dizinde olduğundan emin olun.")
+
+
+# --- Ana Başlatma Bloğu ---
 if __name__ == "__main__":
     root = tk.Tk()
     app = LoginRegisterApp(root)
     root.mainloop()
+

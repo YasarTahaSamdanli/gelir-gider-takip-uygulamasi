@@ -32,6 +32,23 @@ Bu uygulama, kullanıcıların gelir ve giderlerini kolayca takip etmelerini, ka
 - **Veri Dışa Aktarma:**  
   İşlem verilerini Excel (`.xlsx`) veya PDF (`.pdf`) formatında rapor olarak kaydetme. PDF raporlarında Türkçe karakter desteği.
 
+- **Fatura & Teklifler Sekmesi:**
+  Bu yeni sekme, müşterileriniz için profesyonel faturalar ve teklifler oluşturmanızı, yönetmenizi ve PDF olarak dışa aktarmanızı sağlar.
+
+
+- **Uygulamadan Ekran Görüntüleri:**
+
+### Giriş Ve Kayıt olma
+  ![Giriş](https://github.com/YasarTahaSamdanli/Fingo/blob/dc532b6aec6f852e980eed2401b24d5fdf10d66d/Giri%C5%9F-%C3%87%C4%B1k%C4%B1%C5%9F.png)
+
+### Ana işlemler Sayfası
+  ![anaişlemler](https://github.com/YasarTahaSamdanli/Fingo/blob/4cc0b1fe1d164796d0bef7f57800544460713701/anai%C5%9Flemler.png)
+
+### Gelişmiş Araç Ve Rapor Sayfası
+  ![gelişmiş](https://github.com/YasarTahaSamdanli/Fingo/blob/4cc0b1fe1d164796d0bef7f57800544460713701/geli%C5%9Fmi%C5%9Fara%C3%A7lar.png)
+
+### Fatura ve Teklif Sayfası
+  ![fatura](https://github.com/YasarTahaSamdanli/Fingo/blob/4cc0b1fe1d164796d0bef7f57800544460713701/Fatura-Teklif.png)
 ---
 
 ## ⚙️ Kurulum ve Çalıştırma

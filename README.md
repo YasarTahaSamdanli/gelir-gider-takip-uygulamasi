@@ -6,35 +6,45 @@ Bu uygulama, kullanıcıların gelir ve giderlerini kolayca takip etmelerini, ka
 
 ## 🚀 Özellikler
 
-- **Kullanıcı Girişi ve Kayıt Sistemi:**  
-  Güvenli `bcrypt` şifreleme ile kullanıcı hesapları oluşturma ve oturum açma. Yanlış şifre denemelerine karşı hesap kilitleme özelliği.
+### 🔐 Güvenli Kullanıcı Yönetimi
+- Kullanıcı kaydı ve giriş sistemi
+- Şifrelerin güvenli `bcrypt` ile hash'lenerek saklanması
+- Art arda başarısız giriş denemelerinde hesap kilitleme mekanizması
 
-- **İşlem Takibi:**  
-  Gelir ve giderleri miktar, kategori, açıklama ve tarih bilgileriyle kaydetme, güncelleme ve silme.
+### 💰 Detaylı Gelir-Gider Takibi
+- Gelir ve gider işlemlerini kaydetme, düzenleme ve silme
+- İşlemleri tür, kategori, tarih aralığı ve açıklama/arama terimine göre filtreleme
+- Gerçek zamanlı toplam gelir, gider ve bakiye özetleri
 
-- **Kategori Yönetimi:**  
-  Kullanıcı tanımlı gelir ve gider kategorileri oluşturma, düzenleme ve silme.
+### 🔁 Tekrarlayan İşlem Yönetimi
+- Günlük, haftalık, aylık, yıllık tekrarlayan işlemler tanımlama
+- Belirlenen sıklığa göre işlemlerin otomatik olarak eklenmesi
 
-- **Tekrarlayan İşlemler:**  
-  Düzenli aralıklarla (günlük, haftalık, aylık, yıllık) otomatik olarak oluşturulacak gelir veya gider işlemleri tanımlama.
+### 🗂️ Kategori Yönetimi
+- Gelir ve gider kategorileri oluşturma, düzenleme ve silme
 
-- **Filtreleme ve Arama:**  
-  İşlemleri türe, kategoriye, tarih aralığına ve açıklama/arama terimine göre filtreleme ve arama.
+### 📊 Gelişmiş Raporlama ve Görselleştirme
+- Kategori bazında pasta grafikleri ile gelir-gider dağılımı
+- Zaman içindeki kümülatif bakiye değişimi grafiği
+- Excel ve PDF raporları oluşturma
 
-- **Özet Bilgiler:**  
-  Toplam gelir, toplam gider ve mevcut bakiyeyi anlık olarak görüntüleme.
+### 🧾 Fatura ve Teklif Yönetimi
+- Otomatik belge numarası oluşturma (fatura/teklif)
+- KDV oranlı ürün/hizmet ekleme, PDF çıktısı alma
 
-- **Grafik Raporlama:**
-  - Gelir dağılımını gösteren pasta grafik  
-  - Gider dağılımını gösteren pasta grafik  
-  - Zaman içindeki kümülatif bakiye değişimini gösteren çizgi grafik
+### 👥 Müşteri Yönetimi
+- Müşteri bilgilerini (ad, adres, telefon, e-posta) kaydetme ve düzenleme
+- Müşteri adı değiştirildiğinde, ilişkili faturalarda otomatik güncelleme
 
-- **Veri Dışa Aktarma:**  
-  İşlem verilerini Excel (`.xlsx`) veya PDF (`.pdf`) formatında rapor olarak kaydetme. PDF raporlarında Türkçe karakter desteği.
+### 📦 Envanter Yönetimi
+- Ürün adı, stok miktarı, alış/satış fiyatı ve KDV oranını takip etme
+- Faturalara ürün ekledikçe otomatik stok düşümü
 
-- **Fatura & Teklifler Sekmesi:**
-  Bu yeni sekme, müşterileriniz için profesyonel faturalar ve teklifler oluşturmanızı, yönetmenizi ve PDF olarak dışa aktarmanızı sağlar.
+### 📑 Vergi Raporları (KDV Odaklı)
+- Belirli tarih aralıklarında toplam satış KDV’si hesaplama
+- KDV oranlarına göre detaylı dağılım
 
+---
 
 - **Uygulamadan Ekran Görüntüleri:**
 

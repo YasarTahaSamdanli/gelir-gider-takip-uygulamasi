@@ -1,174 +1,87 @@
 # auth_screens.py
 import tkinter as tk
-from tkinter import ttk, messagebox
-import time
-from datetime import datetime, timedelta
+from tkinter import messagebox
 
-from utils import hash_password_bcrypt, check_password_bcrypt, is_valid_password  # utils'den import
-
-
-# database_manager'ı LoginRegisterApp'dan alacağız, direkt import etmiyoruz
-
-class LoginScreen(ttk.Frame):
-    MAX_LOGIN_ATTEMPTS = 3
-    LOCKOUT_DURATION_MINUTES = 5
-
-    def __init__(self, master, app_instance):
+class LoginScreen(tk.Frame):
+    def __init__(self, parent, app_controller):
         """
-        Giriş ekranı arayüzünü ve mantığını oluşturur.
+        Giriş ekranı.
         Args:
-            master (tk.Tk): Ana Tkinter penceresi.
-            app_instance (LoginRegisterApp): Ana uygulama örneği.
+            parent (tk.Tk): Ana Tkinter penceresi.
+            app_controller (LoginRegisterApp): Ana uygulama denetleyicisi.
         """
-        super().__init__(master)
-        self.app_instance = app_instance
-        self.master = master
+        super().__init__(parent, bg="#f5f5f5")
+        self.app_controller = app_controller
 
-        stil = ttk.Style()
-        stil.configure("Login.TLabel", font=("Arial", 12))
-        stil.configure("Login.TEntry", font=("Arial", 12))
-        stil.configure("Login.TButton", font=("Arial", 12, "bold"), padding=10)
+        tk.Label(self, text="Fingo'ya Hoş Geldiniz!", font=("Arial", 16, "bold"), bg="#f5f5f5", fg="#333").pack(pady=20)
 
-        ttk.Label(self, text="Giriş Yap", font=("Arial", 16, "bold")).pack(pady=10)
+        input_frame = tk.Frame(self, bg="#f5f5f5")
+        input_frame.pack(pady=10)
 
-        form_frame = ttk.Frame(self)
-        form_frame.pack(pady=10)
+        tk.Label(input_frame, text="Kullanıcı Adı:", bg="#f5f5f5", fg="#555").grid(row=0, column=0, pady=5, sticky="w")
+        self.username_entry = tk.Entry(input_frame, width=30, font=("Arial", 10), bd=1, relief="solid")
+        self.username_entry.grid(row=0, column=1, pady=5, padx=5)
 
-        ttk.Label(form_frame, text="Kullanıcı Adı:", style="Login.TLabel").grid(row=0, column=0, padx=5, pady=5,
-                                                                                sticky="w")
-        self.username_entry = ttk.Entry(form_frame, style="Login.TEntry", width=30)
-        self.username_entry.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        tk.Label(input_frame, text="Şifre:", bg="#f5f5f5", fg="#555").grid(row=1, column=0, pady=5, sticky="w")
+        self.password_entry = tk.Entry(input_frame, show="*", width=30, font=("Arial", 10), bd=1, relief="solid")
+        self.password_entry.grid(row=1, column=1, pady=5, padx=5)
 
-        ttk.Label(form_frame, text="Şifre:", style="Login.TLabel").grid(row=1, column=0, padx=5, pady=5, sticky="w")
-        self.password_entry = ttk.Entry(form_frame, style="Login.TEntry", show="*", width=30)
-        self.password_entry.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
+        login_button = tk.Button(self, text="Giriş Yap", command=self.login, bg="#4CAF50", fg="white", font=("Arial", 10, "bold"), relief="raised", bd=2)
+        login_button.pack(pady=10)
 
-        ttk.Button(self, text="Giriş", style="Login.TButton", command=self.login).pack(pady=10)
-        ttk.Button(self, text="Kayıt Ol", style="Login.TButton", command=self.app_instance.show_register_screen).pack(
-            pady=5)
+        register_link = tk.Label(self, text="Hesabınız yok mu? Kayıt Olun", fg="#007bff", bg="#f5f5f5", cursor="hand2")
+        register_link.pack(pady=5)
+        register_link.bind("<Button-1>", lambda e: self.app_controller.show_register_screen())
 
     def login(self):
-        """Kullanıcının giriş denemesini yönetir."""
+        """Giriş işlemini yapar."""
         username = self.username_entry.get()
         password = self.password_entry.get()
 
         if not username or not password:
-            messagebox.showerror("Hata", "Kullanıcı adı ve şifre boş bırakılamaz.")
+            messagebox.showerror("Hata", "Lütfen tüm alanları doldurun.")
             return
 
-        # database_manager üzerinden kullanıcı verisini çek
-        user_data = self.app_instance.db_manager.get_user_by_username(username)
-
-        if user_data:
-            user_id, stored_password_hash, login_attempts, lockout_until_str = user_data
-
-            if lockout_until_str:
-                lockout_until = datetime.strptime(lockout_until_str, "%Y-%m-%d %H:%M:%S")
-                if datetime.now() < lockout_until:
-                    remaining_time_seconds = (lockout_until - datetime.now()).total_seconds()
-                    minutes = int(remaining_time_seconds // 60)
-                    seconds = int(remaining_time_seconds % 60)
-                    messagebox.showwarning("Hesap Kilitli",
-                                           f"Bu hesap, çok sayıda başarısız giriş denemesi nedeniyle {minutes} dakika {seconds} saniye kilitlenmiştir.")
-                    time.sleep(1)
-                    return
-
-            if check_password_bcrypt(stored_password_hash, password):
-                messagebox.showinfo("Başarılı", f"Hoş geldiniz, {username}!")
-                # database_manager üzerinden login denemelerini sıfırla
-                self.app_instance.db_manager.update_user_login_attempts(user_id, 0, None)
-                self.app_instance.start_main_app(user_id, username)
-            else:
-                login_attempts += 1
-                # database_manager üzerinden login denemelerini güncelle
-                self.app_instance.db_manager.update_user_login_attempts(user_id, login_attempts)
-
-                if login_attempts >= self.MAX_LOGIN_ATTEMPTS:
-                    lockout_time = datetime.now() + timedelta(minutes=self.LOCKOUT_DURATION_MINUTES)
-                    # database_manager üzerinden kilitlenme zamanını ayarla
-                    self.app_instance.db_manager.update_user_login_attempts(user_id, login_attempts,
-                                                                            lockout_time.strftime("%Y-%m-%d %H:%M:%S"))
-                    messagebox.showerror("Giriş Başarısız",
-                                         f"Çok sayıda yanlış deneme. Hesap {self.LOCKOUT_DURATION_MINUTES} dakika kilitlenmiştir.")
-                else:
-                    messagebox.showerror("Giriş Başarısız", "Geçersiz kullanıcı adı veya şifre.")
-
-                time.sleep(1)
+        user_id = self.app_controller.db_manager.verify_user(username, password)
+        if user_id:
+            messagebox.showinfo("Başarılı", "Giriş başarılı!")
+            self.app_controller.start_main_app(user_id, username)
         else:
-            messagebox.showerror("Giriş Başarısız", "Geçersiz kullanıcı adı veya şifre.")
-            time.sleep(1)
+            messagebox.showerror("Hata", "Kullanıcı adı veya şifre hatalı.")
 
 
-class RegisterScreen(ttk.Frame):
-    def __init__(self, master, app_instance):
+class RegisterScreen(tk.Frame):
+    def __init__(self, parent, app_controller):
         """
-        Kayıt ekranı arayüzünü ve mantığını oluşturur.
+        Kayıt ekranı.
         Args:
-            master (tk.Tk): Ana Tkinter penceresi.
-            app_instance (LoginRegisterApp): Ana uygulama örneği.
+            parent (tk.Tk): Ana Tkinter penceresi.
+            app_controller (LoginRegisterApp): Ana uygulama denetleyicisi.
         """
-        super().__init__(master)
-        self.app_instance = app_instance
-        self.master = master
+        super().__init__(parent, bg="#f5f5f5")
+        self.app_controller = app_controller
 
-        stil = ttk.Style()
-        stil.configure("Register.TLabel", font=("Arial", 12))
-        stil.configure("Register.TEntry", font=("Arial", 12))
-        stil.configure("Register.TButton", font=("Arial", 12, "bold"), padding=10)
+        tk.Label(self, text="Yeni Hesap Oluştur", font=("Arial", 16, "bold"), bg="#f5f5f5", fg="#333").pack(pady=20)
 
-        ttk.Label(self, text="Kayıt Ol", font=("Arial", 16, "bold")).pack(pady=10)
+        input_frame = tk.Frame(self, bg="#f5f5f5")
+        input_frame.pack(pady=10)
 
-        form_frame = ttk.Frame(self)
-        form_frame.pack(pady=10)
+        tk.Label(input_frame, text="Kullanıcı Adı:", bg="#f5f5f5", fg="#555").grid(row=0, column=0, pady=5, sticky="w")
+        self.username_entry = tk.Entry(input_frame, width=30, font=("Arial", 10), bd=1, relief="solid")
+        self.username_entry.grid(row=0, column=1, pady=5, padx=5)
 
-        ttk.Label(form_frame, text="Kullanıcı Adı:", style="Register.TLabel").grid(row=0, column=0, padx=5, pady=5,
-                                                                                   sticky="w")
-        self.username_entry = ttk.Entry(form_frame, style="Register.TEntry", width=30)
-        self.username_entry.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        tk.Label(input_frame, text="Şifre:", bg="#f5f5f5", fg="#555").grid(row=1, column=0, pady=5, sticky="w")
+        self.password_entry = tk.Entry(input_frame, show="*", width=30, font=("Arial", 10), bd=1, relief="solid")
+        self.password_entry.grid(row=1, column=1, pady=5, padx=5)
 
-        ttk.Label(form_frame, text="Şifre:", style="Register.TLabel").grid(row=1, column=0, padx=5, pady=5, sticky="w")
-        self.password_entry = ttk.Entry(form_frame, style="Register.TEntry", show="*", width=30)
-        self.password_entry.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
+        tk.Label(input_frame, text="Şifre Tekrarı:", bg="#f5f5f5", fg="#555").grid(row=2, column=0, pady=5, sticky="w")
+        self.confirm_password_entry = tk.Entry(input_frame, show="*", width=30, font=("Arial", 10), bd=1, relief="solid")
+        self.confirm_password_entry.grid(row=2, column=1, pady=5, padx=5)
 
-        ttk.Label(form_frame, text="Şifre Tekrar:", style="Register.TLabel").grid(row=2, column=0, padx=5, pady=5,
-                                                                                  sticky="w")
-        self.password_confirm_entry = ttk.Entry(form_frame, style="Register.TEntry", show="*", width=30)
-        self.password_confirm_entry.grid(row=2, column=1, padx=5, pady=5, sticky="ew")
+        # Buton doğrudan LoginRegisterApp'teki register_user metodunu çağırıyor
+        register_button = tk.Button(self, text="Kayıt Ol", command=self.app_controller.register_user, bg="#007bff", fg="white", font=("Arial", 10, "bold"), relief="raised", bd=2)
+        register_button.pack(pady=10)
 
-        ttk.Button(self, text="Kayıt Ol", style="Register.TButton", command=self.register).pack(pady=10)
-        ttk.Button(self, text="Giriş Ekranına Dön", style="Register.TButton",
-                   command=self.app_instance.show_login_screen).pack(pady=5)
-
-    def register(self):
-        """Yeni kullanıcı kaydını yönetir."""
-        username = self.username_entry.get()
-        password = self.password_entry.get()
-        password_confirm = self.password_confirm_entry.get()
-
-        if not username or not password or not password_confirm:
-            messagebox.showerror("Hata", "Tüm alanlar doldurulmalıdır.")
-            return
-
-        if password != password_confirm:
-            messagebox.showerror("Hata", "Şifreler uyuşmuyor.")
-            return
-
-        is_valid, msg = is_valid_password(password)
-        if not is_valid:
-            messagebox.showerror("Hata", msg)
-            return
-
-        try:
-            # database_manager üzerinden kullanıcı adının varlığını kontrol et
-            if self.app_instance.db_manager.get_user_by_username(username):
-                messagebox.showerror("Hata", "Bu kullanıcı adı zaten mevcut.")
-                return
-
-            hashed_password = hash_password_bcrypt(password)
-            # database_manager üzerinden yeni kullanıcı ekle
-            self.app_instance.db_manager.insert_user(username, hashed_password)
-            messagebox.showinfo("Başarılı", "Kayıt başarıyla tamamlandı. Şimdi giriş yapabilirsiniz.")
-            self.app_instance.show_login_screen()
-        except Exception as e:  # database_manager'daki hatalar artık daha spesifik yakalanabilir
-            messagebox.showerror("Hata", f"Kayıt işlemi sırasında hata oluştu: {e}")
-
+        login_link = tk.Label(self, text="Zaten hesabınız var mı? Giriş Yapın", fg="#007bff", bg="#f5f5f5", cursor="hand2")
+        login_link.pack(pady=5)
+        login_link.bind("<Button-1>", lambda e: self.app_controller.show_login_screen())

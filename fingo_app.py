@@ -1,6 +1,6 @@
 # fingo_app.py
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, messagebox, filedialog, simpledialog  # simpledialog eklendi
 import sqlite3
 from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
@@ -16,9 +16,9 @@ from pdf_generator import PDFGenerator, GLOBAL_REPORTLAB_FONT_NAME  # PDF oluşt
 from ai_predictor import AIPredictor  # Yapay zeka kategori tahmincisini yönetir
 
 # Matplotlib için Türkçe font ayarı
-# Bu ayar, grafiklerde Türkçe karakterlerin düzgün görünmesini sağlar.
+# Bu ayar, grafiklarda Türkçe karakterlerin düzgün görünmesini sağlar.
 # 'Arial' fontu bulunamazsa 'DejaVu Sans' gibi genel bir fonta düşer.
-plt.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans']
+plt.rcParams['font.sans-serif'] = [GLOBAL_REPORTLAB_FONT_NAME, 'DejaVu Sans']  # GLOBAL_REPORTLAB_FONT_NAME kullanıldı
 plt.rcParams['axes.unicode_minus'] = False  # Eksi işaretinin doğru görünmesi için
 
 
@@ -40,6 +40,7 @@ class GelirGiderUygulamasi:
         self.cursor = self.db_manager.cursor
         self.kullanici_id = kullanici_id
         self.username = username
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)  # Pencere kapatma olayını yakala
 
         # Seçili öğelerin ID'lerini saklamak için değişkenler
         self.selected_item_id = None  # Ana işlemler listesinden seçilen öğe
@@ -48,13 +49,21 @@ class GelirGiderUygulamasi:
         self.selected_invoice_id = None  # Fatura/Teklif listesinden seçilen öğe
         self.selected_customer_id = None  # Müşteri listesinden seçilen öğe
         self.selected_product_id = None  # Ürün listesinden seçilen öğe
+        self.selected_savings_goal_id = None  # YENİ: Tasarruf hedefi listesinden seçilen öğe
 
         # PDF oluşturucu örneğini başlatırken global font adını ilet
-        self.pdf_generator = PDFGenerator(font_name=GLOBAL_REPORTLAB_FONT_NAME)
+        # PDFGenerator init metodunun signature'ı güncellendiği için db_manager ve user_id de ekleniyor.
+        self.pdf_generator = PDFGenerator(db_manager=self.db_manager, user_id=self.kullanici_id,
+                                          font_name=GLOBAL_REPORTLAB_FONT_NAME)
 
         # Yapay zeka tahmincisini başlatırken db_manager ve user_id'yi ilet.
         # Bu sayede AI modeli kullanıcının kendi verileriyle eğitilebilir.
         self.ai_predictor = AIPredictor(db_manager=self.db_manager, user_id=self.kullanici_id)
+        # Model yüklenemezse veya eğitilemezse hata mesajı vermesin, sonraki bir işlemde tekrar denenir
+        try:
+            self.ai_predictor.load_or_train_model()
+        except Exception as e:
+            print(f"AI modeli yüklenirken veya eğitilirken hata oluştu: {e}. Fonksiyonel olmayabilir.")
 
         # Uygulamanın ana arayüzünü oluştur
         self.arayuz_olustur()
@@ -66,8 +75,23 @@ class GelirGiderUygulamasi:
         self.listele_musteriler()  # Müşterileri listele
         self.listele_urunler()  # Ürünleri listele
         self.listele_fatura_teklifler()  # Fatura/Teklifleri listele
+        self.listele_tasarruf_hedefleri()  # YENİ: Tasarruf hedeflerini listele
 
         self.uretim_kontrolu()  # Tekrarlayan işlemlerin otomatik üretimini kontrol et
+
+    def on_closing(self):
+        """Uygulama kapatılırken veritabanı bağlantısını kapatır."""
+        if messagebox.askokcancel("Çıkış", "Uygulamadan çıkmak istediğinize emin misiniz?"):
+            self.db_manager.close()
+            self.root.destroy()
+
+    def show_message(self, title, message):
+        """Genel mesaj kutusu gösterir."""
+        messagebox.showinfo(title, message)
+
+    def show_error(self, title, message):
+        """Genel hata mesajı kutusu gösterir."""
+        messagebox.showerror(title, message)
 
     def arayuz_olustur(self, parent_frame=None):
         """Uygulamanın ana arayüzünü (sekmeler, butonlar vb.) oluşturur."""
@@ -131,6 +155,12 @@ class GelirGiderUygulamasi:
         self.notebook.add(self.tab_vergi_raporlari, text="Vergi Raporları")
         self._vergi_raporlari_arayuzu_olustur(self.tab_vergi_raporlari)  # Vergi raporları sekmesinin içeriğini oluştur
 
+        # YENİ SEKME: Tasarruf Hedefleri
+        self.tab_tasarruf_hedefleri = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_tasarruf_hedefleri, text="Tasarruf Hedefleri")
+        self._tasarruf_hedefleri_arayuzu_olustur(self.tab_tasarruf_hedefleri)
+
+    # --- Ana Ekran (Gelir/Gider Girişi) Fonksiyonları ---
     def _ana_islemler_arayuzu_olustur(self, parent_frame):
         """Ana işlemler sekmesinin kullanıcı arayüzünü oluşturur."""
         # İşlem giriş/düzenleme bölümü
@@ -191,15 +221,20 @@ class GelirGiderUygulamasi:
         # Filtreleme widget'ları
         ttk.Label(filtre_frame, text="Tür:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
         self.filtre_tur_var = tk.StringVar(value="Tümü")
-        ttk.Combobox(filtre_frame, textvariable=self.filtre_tur_var,
-                     values=["Tümü", "Gelir", "Gider"], state="readonly", width=12).grid(row=0, column=1, padx=5,
-                                                                                         pady=5, sticky="ew")
+        self.filtre_tur_combobox = ttk.Combobox(filtre_frame, textvariable=self.filtre_tur_var,
+                                                values=["Tümü", "Gelir", "Gider"], state="readonly", width=12)
+        self.filtre_tur_combobox.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        self.filtre_tur_combobox.bind("<<ComboboxSelected>>", lambda e: self.listele())
 
         ttk.Label(filtre_frame, text="Kategori:").grid(row=0, column=2, padx=5, pady=5, sticky="w")
         self.filtre_kategori_var = tk.StringVar(value="Tümü")
         self.filtre_kategori_combobox = ttk.Combobox(filtre_frame, textvariable=self.filtre_kategori_var,
                                                      values=["Tümü"], width=12)
         self.filtre_kategori_combobox.grid(row=0, column=3, padx=5, pady=5, sticky="ew")
+        self.filtre_kategori_combobox.bind("<<ComboboxSelected>>", lambda e: self.listele())
+        self.filtre_kategori_combobox.bind("<Button-1>",
+                                           lambda e: self.kategorileri_yukle(self.filtre_kategori_combobox,
+                                                                             include_all=True))
 
         ttk.Label(filtre_frame, text="Açıklama/Arama:").grid(row=0, column=4, padx=5, pady=5, sticky="w")
         self.arama_entry = ttk.Entry(filtre_frame, width=20)
@@ -209,7 +244,8 @@ class GelirGiderUygulamasi:
         ttk.Label(filtre_frame, text="Tarih Aralığı:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
         self.bas_tarih_entry = DateEntry(filtre_frame, selectmode='day', date_pattern='yyyy-mm-dd', width=12)
         self.bas_tarih_entry.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
-        self.bas_tarih_entry.set_date("2023-01-01")  # Başlangıç tarihini ayarla
+        self.bas_tarih_entry.set_date(
+            (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d"))  # Varsayılan 1 yıl önce
 
         ttk.Label(filtre_frame, text="-").grid(row=1, column=2, sticky="w")
 
@@ -280,6 +316,169 @@ class GelirGiderUygulamasi:
                                       font=("Arial", 11, "bold"))
         self.bakiye_label.pack(side="left", padx=20, fill="x", expand=True)
 
+    def kaydet(self):
+        """Yeni bir gelir/gider işlemini veritabanına kaydeder."""
+        tur = self.tur_var.get()
+        miktar_str = self.miktar_entry.get()
+        kategori = self.kategori_var.get()
+        aciklama = self.aciklama_entry.get()
+        tarih = self.tarih_entry.get()
+
+        if not tur or not miktar_str or not kategori or not tarih:
+            messagebox.showerror("Hata", "Lütfen tüm gerekli alanları doldurun.")
+            return
+
+        try:
+            miktar = float(miktar_str)
+            if miktar <= 0:
+                messagebox.showerror("Hata", "Miktar pozitif bir sayı olmalıdır.")
+                return
+        except ValueError:
+            messagebox.showerror("Hata", "Miktar geçerli bir sayı olmalıdır.")
+            return
+
+        self.db_manager.insert_transaction(tur, miktar, kategori, aciklama, tarih, self.kullanici_id)
+        messagebox.showinfo("Başarılı", "İşlem başarıyla kaydedildi.")
+        self.listele()  # Listeyi güncelle
+        self.temizle()  # Giriş alanlarını temizle
+        self.ai_predictor.load_or_train_model()  # Yeni veri eklendiği için AI modelini yeniden eğit
+
+    def guncelle(self):
+        """Seçili gelir/gider işlemini günceller."""
+        if not self.selected_item_id:
+            messagebox.showwarning("Uyarı", "Lütfen güncellemek için bir işlem seçin.")
+            return
+
+        tur = self.tur_var.get()
+        miktar_str = self.miktar_entry.get()
+        kategori = self.kategori_var.get()
+        aciklama = self.aciklama_entry.get()
+        tarih = self.tarih_entry.get()
+
+        if not tur or not miktar_str or not kategori or not tarih:
+            messagebox.showerror("Hata", "Lütfen tüm gerekli alanları doldurun.")
+            return
+
+        try:
+            miktar = float(miktar_str)
+            if miktar <= 0:
+                messagebox.showerror("Hata", "Miktar pozitif bir sayı olmalıdır.")
+                return
+        except ValueError:
+            messagebox.showerror("Hata", "Miktar geçerli bir sayı olmalıdır.")
+            return
+
+        self.db_manager.update_transaction(self.selected_item_id, tur, miktar, kategori, aciklama, tarih,
+                                           self.kullanici_id)
+        messagebox.showinfo("Başarılı", "İşlem başarıyla güncellendi.")
+        self.listele()  # Listeyi güncelle
+        self.temizle()  # Giriş alanlarını temizle
+        self.selected_item_id = None
+        self.ai_predictor.load_or_train_model()  # Veri güncellendiği için AI modelini yeniden eğit
+
+    def sil(self):
+        """Seçili gelir/gider işlemini siler."""
+        if not self.selected_item_id:
+            messagebox.showwarning("Uyarı", "Lütfen silmek için bir işlem seçin.")
+            return
+
+        if messagebox.askyesno("Onay", "Seçili işlemi silmek istediğinizden emin misiniz?"):
+            self.db_manager.delete_transaction(self.selected_item_id, self.kullanici_id)
+            messagebox.showinfo("Başarılı", "İşlem başarıyla silindi.")
+            self.listele()  # Listeyi güncelle
+            self.temizle()  # Giriş alanlarını temizle
+            self.selected_item_id = None
+            self.ai_predictor.load_or_train_model()  # Veri silindiği için AI modelini yeniden eğit
+
+    def temizle(self):
+        """Giriş alanlarını temizler ve seçimi sıfırlar."""
+        self.tur_var.set("Gider")
+        self.miktar_entry.delete(0, tk.END)
+        self.kategori_var.set("")
+        self.aciklama_entry.delete(0, tk.END)
+        self.tarih_entry.set_date(datetime.now().strftime("%Y-%m-%d"))
+        self.selected_item_id = None
+        self.liste.selection_remove(self.liste.selection())  # Treeview'daki seçimi kaldır
+
+    def listele(self):
+        """Belirli filtrelerle işlemleri veritabanından çeker ve Treeview'da listeler."""
+        for i in self.liste.get_children():
+            self.liste.delete(i)
+
+        filtre_tur = self.filtre_tur_var.get()
+        filtre_kategori = self.filtre_kategori_var.get()
+        arama_terimi = self.arama_entry.get().strip()
+        baslangic_tarih = self.bas_tarih_entry.get()
+        bitis_tarih = self.bit_tarih_entry.get()
+
+        transactions = self.db_manager.get_transactions(self.kullanici_id, filtre_tur, filtre_kategori, baslangic_tarih,
+                                                        bitis_tarih, arama_terimi)
+
+        toplam_gelir = 0
+        toplam_gider = 0
+
+        for row in transactions:
+            self.liste.insert("", "end", values=row)
+            if row[1] == "Gelir":
+                toplam_gelir += row[2]
+            else:
+                toplam_gider += row[2]
+
+        self.toplam_gelir_label.config(text=f"Toplam Gelir: ₺{toplam_gelir:.2f}")
+        self.toplam_gider_label.config(text=f"Toplam Gider: ₺{toplam_gider:.2f}")
+        self.bakiye_label.config(text=f"Bakiye: ₺{toplam_gelir - toplam_gider:.2f}")
+
+    def liste_secildi(self, event):
+        """Treeview'da bir satır seçildiğinde giriş alanlarını doldurur."""
+        selected_item = self.liste.focus()
+        if selected_item:
+            values = self.liste.item(selected_item, "values")
+            self.selected_item_id = values[0]  # ID'yi sakla
+
+            self.tur_var.set(values[1])
+            self.miktar_entry.delete(0, tk.END)
+            self.miktar_entry.insert(0, str(values[2]))
+            self.kategori_var.set(values[3])
+            self.aciklama_entry.delete(0, tk.END)
+            self.aciklama_entry.insert(0, values[4])
+            self.tarih_entry.set_date(values[5])
+        else:
+            self.temizle()  # Seçim kalkarsa alanları temizle
+
+    def _kategori_oner(self):
+        """Açıklama alanına göre AI kullanarak kategori önerir."""
+        aciklama = self.aciklama_entry.get().strip()
+        if not aciklama:
+            messagebox.showwarning("Uyarı", "Lütfen kategori tahmini için bir açıklama girin.")
+            return
+
+        # AI modelinin eğitilip eğitilmediğini kontrol et
+        if not hasattr(self.ai_predictor, 'model') or self.ai_predictor.model is None:
+            messagebox.showinfo("Bilgi",
+                                "AI modeli henüz eğitilmemiş veya yüklenmemiş. Lütfen birkaç işlem girdikten sonra tekrar deneyin.")
+            try:
+                self.ai_predictor.load_or_train_model()  # Tekrar eğitim denemesi
+            except Exception as e:
+                self.show_error("AI Hatası", f"AI modeli yüklenirken/eğitilirken hata oluştu: {e}")
+                return
+
+        predicted_category = self.ai_predictor.predict(aciklama)
+        if predicted_category:
+            self.kategori_var.set(predicted_category)
+            messagebox.showinfo("Kategori Tahmini", f"Tahmin edilen kategori: {predicted_category}")
+        else:
+            messagebox.showinfo("Kategori Tahmini",
+                                "Kategori tahmin edilemedi. Lütfen daha fazla veri girişi yapın veya manuel seçin.")
+
+    def _retrain_ai_model(self):
+        """Yapay zeka modelini manuel olarak yeniden eğitir."""
+        try:
+            self.ai_predictor.load_or_train_model(force_retrain=True)
+            messagebox.showinfo("Başarılı", "Yapay zeka modeli başarıyla yeniden eğitildi.")
+        except Exception as e:
+            messagebox.showerror("Hata", f"Yapay zeka modeli yeniden eğitilirken bir hata oluştu: {e}")
+
+    # --- Gelişmiş Araçlar & Raporlar Sekmesi Fonksiyonları ---
     def _gelismis_araclar_arayuzu_olustur(self, parent_frame):
         """Gelişmiş araçlar sekmesinin arayüzünü oluşturur."""
         # Sol ve sağ panelleri oluştur
@@ -313,6 +512,8 @@ class GelirGiderUygulamasi:
                 setattr(self, var_name, var)
                 if var_name == "kategori_tekrar_var":
                     self.kategori_tekrar_combobox = cb
+                    cb.bind("<Button-1>",
+                            lambda e: self.kategorileri_yukle(self.kategori_tekrar_combobox))  # Tıklayınca güncelle
             elif widget_type == "Entry":
                 entry = ttk.Entry(tekrar_eden_frame, width=35)
                 entry.grid(row=i, column=1, padx=10, pady=5, sticky="ew")
@@ -338,6 +539,10 @@ class GelirGiderUygulamasi:
         ttk.Button(tekrar_eden_buton_frame, text="Temizle", command=self.temizle_tekrar_eden).pack(side="left", padx=5,
                                                                                                    fill="x",
                                                                                                    expand=True)
+        ttk.Button(tekrar_eden_buton_frame, text="Manuel Üret", command=self.manuel_uret_tekrar_eden).pack(side="left",
+                                                                                                           padx=5,
+                                                                                                           fill="x",
+                                                                                                           expand=True)
 
         # Tekrarlayan işlemler listesi (Treeview)
         tekrar_eden_liste_frame = ttk.Frame(left_panel_advanced, padding="10 0 0 0")
@@ -435,32 +640,415 @@ class GelirGiderUygulamasi:
         ttk.Button(grafik_rapor_frame, text="Yapay Zekayı Yeniden Eğit", command=self._retrain_ai_model).pack(pady=5,
                                                                                                               fill="x")
 
+    # Tekrarlayan İşlem Fonksiyonları
+    def kaydet_tekrar_eden(self):
+        """Yeni bir tekrarlayan işlem kaydeder."""
+        tur = self.tur_tekrar_var.get()
+        miktar_str = self.miktar_tekrar_entry.get()
+        kategori = self.kategori_tekrar_var.get()
+        aciklama = self.aciklama_tekrar_entry.get()
+        baslangic_tarihi = self.baslangic_tarih_tekrar_entry.get()
+        siklilik = self.siklilik_var.get()
+
+        if not tur or not miktar_str or not kategori or not baslangic_tarihi or not siklilik:
+            self.show_error("Hata", "Lütfen tüm gerekli alanları doldurun.")
+            return
+
+        try:
+            miktar = float(miktar_str)
+            if miktar <= 0:
+                self.show_error("Hata", "Miktar pozitif bir sayı olmalıdır.")
+                return
+        except ValueError:
+            self.show_error("Hata", "Miktar geçerli bir sayı olmalıdır.")
+            return
+
+        self.db_manager.insert_recurring_transaction(tur, miktar, kategori, aciklama, baslangic_tarihi, siklilik,
+                                                     baslangic_tarihi, self.kullanici_id)
+        self.show_message("Başarılı", "Tekrarlayan işlem başarıyla kaydedildi.")
+        self.listele_tekrar_eden_islemler()
+        self.temizle_tekrar_eden()
+
+    def sil_tekrar_eden(self):
+        """Seçili tekrarlayan işlemi siler."""
+        if not self.selected_recurring_item_id:
+            self.show_warning("Uyarı", "Lütfen silmek için bir tekrarlayan işlem seçin.")
+            return
+
+        if messagebox.askyesno("Onay", "Seçili tekrarlayan işlemi silmek istediğinizden emin misiniz?"):
+            self.db_manager.delete_recurring_transaction(self.selected_recurring_item_id, self.kullanici_id)
+            self.show_message("Başarılı", "Tekrarlayan işlem başarıyla silindi.")
+            self.listele_tekrar_eden_islemler()
+            self.temizle_tekrar_eden()
+            self.selected_recurring_item_id = None
+
+    def temizle_tekrar_eden(self):
+        """Tekrarlayan işlem giriş alanlarını temizler."""
+        self.tur_tekrar_var.set("Gider")
+        self.miktar_tekrar_entry.delete(0, tk.END)
+        self.kategori_tekrar_var.set("")
+        self.aciklama_tekrar_entry.delete(0, tk.END)
+        self.baslangic_tarih_tekrar_entry.set_date(datetime.now().strftime("%Y-%m-%d"))
+        self.siklilik_var.set("Aylık")
+        self.selected_recurring_item_id = None
+        self.tekrar_eden_liste.selection_remove(self.tekrar_eden_liste.selection())
+
+    def listele_tekrar_eden_islemler(self):
+        """Tekrarlayan işlemleri veritabanından çeker ve Treeview'da listeler."""
+        for i in self.tekrar_eden_liste.get_children():
+            self.tekrar_eden_liste.delete(i)
+
+        recurring_transactions = self.db_manager.get_recurring_transactions(self.kullanici_id)
+        for row in recurring_transactions:
+            self.tekrar_eden_liste.insert("", "end", values=row)
+
+    def tekrar_eden_liste_secildi(self, event):
+        """Tekrarlayan işlemler Treeview'ında bir satır seçildiğinde giriş alanlarını doldurur."""
+        selected_item = self.tekrar_eden_liste.focus()
+        if selected_item:
+            values = self.tekrar_eden_liste.item(selected_item, "values")
+            self.selected_recurring_item_id = values[0]
+
+            self.tur_tekrar_var.set(values[1])
+            self.miktar_tekrar_entry.delete(0, tk.END)
+            self.miktar_tekrar_entry.insert(0, str(values[2]))
+            self.kategori_tekrar_var.set(values[3])
+            self.aciklama_tekrar_entry.delete(0, tk.END)
+            self.aciklama_tekrar_entry.insert(0, values[4])
+            self.baslangic_tarih_tekrar_entry.set_date(values[5])
+            self.siklilik_var.set(values[6])
+        else:
+            self.temizle_tekrar_eden()
+
+    def uretim_kontrolu(self):
+        """Tekrarlayan işlemlerin otomatik üretimini kontrol eder ve yapar."""
+        recurring_transactions = self.db_manager.get_recurring_transactions(self.kullanici_id)
+        today = datetime.now().date()
+        uretilen_sayi = 0
+
+        for rec_t in recurring_transactions:
+            rec_id, tur, miktar, kategori, aciklama, baslangic_tarih_str, siklilik, son_uretilen_tarih_str = rec_t
+
+            last_generated_date = datetime.strptime(son_uretilen_tarih_str, '%Y-%m-%d').date()
+
+            # sonraki_uretim_tarihi'ni son_uretilen_tarih'ten başlat
+            sonraki_uretim_tarihi = last_generated_date
+
+            while sonraki_uretim_tarihi < today:
+                if siklilik == "Günlük":
+                    sonraki_uretim_tarihi += timedelta(days=1)
+                elif siklilik == "Haftalık":
+                    sonraki_uretim_tarihi += timedelta(weeks=1)
+                elif siklilik == "Aylık":
+                    # Ay atlamayı daha düzgün yönet
+                    year = sonraki_uretim_tarihi.year
+                    month = sonraki_uretim_tarihi.month + 1
+                    if month > 12:
+                        month = 1
+                        year += 1
+                    # Ayın son gününü aşmamak için min fonksiyonu
+                    day = min(sonraki_uretim_tarihi.day,
+                              (datetime(year, month + 1, 1) - timedelta(days=1)).day if month < 12 else 31)
+                    sonraki_uretim_tarihi = datetime(year, month, day).date()
+                elif siklilik == "Yıllık":
+                    year = sonraki_uretim_tarihi.year + 1
+                    day = min(sonraki_uretim_tarihi.day,
+                              (datetime(year, 1, 1) + timedelta(days=364 if year % 4 != 0 else 365)).day)
+                    sonraki_uretim_tarihi = datetime(year, sonraki_uretim_tarihi.month, day).date()
+                else:  # Tanımsız sıklık
+                    break
+
+                # Eğer yeni üretim tarihi bugüne kadar gelmişse ve zaten üretilmemişse
+                if sonraki_uretim_tarihi <= today:
+                    self.db_manager.insert_transaction(tur, miktar, kategori, aciklama,
+                                                       sonraki_uretim_tarihi.strftime('%Y-%m-%d'), self.kullanici_id)
+                    self.db_manager.update_recurring_transaction_last_generated_date(rec_id,
+                                                                                     sonraki_uretim_tarihi.strftime(
+                                                                                         '%Y-%m-%d'))
+                    uretilen_sayi += 1
+                else:
+                    break  # Bugün veya geçmişteki tüm tekrarlar üretildi
+
+        if uretilen_sayi > 0:
+            self.show_message("Tekrarlayan İşlemler",
+                              f"{uretilen_sayi} adet tekrarlayan işlem otomatik olarak oluşturuldu.")
+            self.listele()  # Ana ekranı da güncelle
+            self.ai_predictor.load_or_train_model()  # Yeni verilerle AI'ı eğit
+
+        self.listele_tekrar_eden_islemler()  # Tekrarlayanlar listesini güncelle
+
+    def manuel_uret_tekrar_eden(self):
+        """Seçilen tekrarlayan işlemi manuel olarak üretir ve son üretilen tarihi bugüne günceller."""
+        if not self.selected_recurring_item_id:
+            self.show_warning("Uyarı", "Lütfen manuel olarak üretilecek bir tekrarlayan işlem seçin.")
+            return
+
+        selected_item_values = self.tekrar_eden_liste.item(self.selected_recurring_item_id, "values")
+        rec_id = selected_item_values[0]
+        tur = selected_item_values[1]
+        miktar = selected_item_values[2]
+        kategori = selected_item_values[3]
+        aciklama = selected_item_values[4]
+
+        today_str = datetime.now().strftime('%Y-%m-%d')
+
+        try:
+            self.db_manager.insert_transaction(tur, miktar, kategori, aciklama, today_str, self.kullanici_id)
+            self.db_manager.update_recurring_transaction_last_generated_date(rec_id, today_str)
+            self.show_message("Başarılı", f"'{aciklama}' açıklamalı işlem bugün için manuel olarak üretildi.")
+            self.listele()  # Ana ekranı güncelle
+            self.listele_tekrar_eden_islemler()  # Tekrarlayanlar ekranını güncelle
+            self.ai_predictor.load_or_train_model()  # Yeni veri eklendiği için AI'ı eğit
+        except Exception as e:
+            self.show_error("Hata", f"Manuel üretim sırasında bir hata oluştu: {e}")
+
+    # Kategori Yönetimi Fonksiyonları
+    def kategorileri_yukle(self, combobox_widget=None, include_all=False):
+        """Kategori combobox'larını ve kategori listesini günceller."""
+        kategoriler = self.db_manager.get_categories_for_user(self.kullanici_id)
+        kategori_adlari = [k[1] for k in kategoriler]  # k[1] kategori adıdır
+
+        if include_all:
+            kategori_adlari.insert(0, "Tümü")  # "Tümü" seçeneğini en başa ekle
+
+        # Ana ekrandaki kategori combobox'ını güncelle
+        if hasattr(self, 'kategori_combobox') and not combobox_widget:
+            self.kategori_combobox['values'] = kategori_adlari
+            if not self.kategori_var.get() in kategori_adlari and not include_all:  # Seçili kategori yoksa veya kaldırıldıysa
+                self.kategori_var.set("")  # Temizle
+
+        # Tekrarlayan işlemlerdeki kategori combobox'ını güncelle
+        if hasattr(self, 'kategori_tekrar_combobox') and not combobox_widget:
+            self.kategori_tekrar_combobox['values'] = kategori_adlari
+            if not self.kategori_tekrar_var.get() in kategori_adlari and not include_all:
+                self.kategori_tekrar_var.set("")
+
+        # Filtreleme combobox'ını güncelle
+        if hasattr(self, 'filtre_kategori_combobox') and not combobox_widget:
+            self.filtre_kategori_combobox['values'] = kategori_adlari
+            if not self.filtre_kategori_var.get() in kategori_adlari:
+                self.filtre_kategori_var.set("Tümü")  # Filtreyi sıfırla
+
+        # Eğer belirli bir combobox widget'ı belirtildiyse sadece onu güncelle
+        if combobox_widget:
+            combobox_widget['values'] = kategori_adlari
+            if not combobox_widget.get() in kategori_adlari and not include_all:
+                combobox_widget.set("")  # Temizle
+
+        # Kategori yönetim ekranındaki Treeview'ı güncelle
+        if hasattr(self, 'kategori_liste'):
+            for i in self.kategori_liste.get_children():
+                self.kategori_liste.delete(i)
+            for kategori in kategoriler:
+                self.kategori_liste.insert("", "end", values=kategori)
+
+    def kategori_ekle(self, kategori_adi, kategori_turu, show_message=True):
+        """Yeni bir kategori ekler."""
+        kategori_adi = kategori_adi.strip()
+        if not kategori_adi or not kategori_turu:
+            if show_message:
+                self.show_error("Hata", "Lütfen kategori adı ve türünü girin.")
+            return False
+
+        if self.db_manager.get_category_by_name(kategori_adi, self.kullanici_id):
+            if show_message:
+                self.show_error("Hata", f"'{kategori_adi}' adında bir kategori zaten mevcut.")
+            return False
+
+        if self.db_manager.insert_category(kategori_adi, kategori_turu, self.kullanici_id):
+            if show_message:
+                self.show_message("Başarılı", f"'{kategori_adi}' kategorisi başarıyla eklendi.")
+            self.kategorileri_yukle()
+            self.temizle_kategori()
+            return True
+        else:
+            if show_message:
+                self.show_error("Hata", "Kategori eklenirken bir sorun oluştu.")
+            return False
+
+    def kategori_sil(self):
+        """Seçili kategoriyi siler."""
+        if not self.selected_category_id:
+            self.show_warning("Uyarı", "Lütfen silmek için bir kategori seçin.")
+            return
+
+        selected_values = self.kategori_liste.item(self.selected_category_id, "values")
+        category_name = selected_values[1]  # Kategori adı
+
+        # Bu kategorinin kullanıldığı işlem var mı kontrol et
+        transaction_count = self.db_manager.count_transactions_by_category(category_name, self.kullanici_id)
+        if transaction_count > 0:
+            if not messagebox.askyesno("Uyarı",
+                                       f"'{category_name}' kategorisi {transaction_count} işlemde kullanılıyor. Silerseniz bu işlemlerin kategori bilgisi kaldırılacaktır. Devam etmek istiyor musunuz?"):
+                return
+            # İşlemlerdeki kategori bilgisini NULL yap
+            self.db_manager.update_transactions_category_to_null(category_name, self.kullanici_id)
+
+        if messagebox.askyesno("Onay", f"Seçili kategoriyi ('{category_name}') silmek istediğinizden emin misiniz?"):
+            self.db_manager.delete_category(self.selected_category_id, self.kullanici_id)
+            self.show_message("Başarılı", "Kategori başarıyla silindi.")
+            self.kategorileri_yukle()
+            self.temizle_kategori()
+            self.listele()  # Ana işlem listesini güncelle
+            self.ai_predictor.load_or_train_model()  # AI modelini yeniden eğit (veri değiştiği için)
+            self.selected_category_id = None
+
+    def temizle_kategori(self):
+        """Kategori giriş alanlarını temizler ve seçimi sıfırlar."""
+        self.kategori_adi_entry.delete(0, tk.END)
+        self.kategori_tur_var.set("Genel")
+        self.selected_category_id = None
+        self.kategori_liste.selection_remove(self.kategori_liste.selection())
+
+    def kategori_liste_secildi(self, event):
+        """Kategori Treeview'da bir satır seçildiğinde giriş alanlarını doldurur."""
+        selected_item = self.kategori_liste.focus()
+        if selected_item:
+            values = self.kategori_liste.item(selected_item, "values")
+            self.selected_category_id = values[0]
+
+            self.kategori_adi_entry.delete(0, tk.END)
+            self.kategori_adi_entry.insert(0, values[1])
+            self.kategori_tur_var.set(values[2])
+        else:
+            self.temizle_kategori()
+
+    # Grafik ve Raporlama Fonksiyonları
+    def grafik_goster(self):
+        """Gelir-Gider grafiklerini Matplotlib ile gösterir."""
+        kategori_verileri, zaman_verileri = self.db_manager.get_transaction_for_charts(self.kullanici_id)
+
+        # Matplotlib grafiklerini temizle
+        plt.close('all')  # Önceki tüm figürleri kapat
+        self.fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))  # 1 satır, 2 sütunlu subplot
+
+        # Kategori Bazında Pasta Grafiği
+        income_categories = {}
+        expense_categories = {}
+
+        for _type, category, amount in kategori_verileri:
+            if category:  # Kategori boş olmayanları al
+                if _type == "Gelir":
+                    income_categories[category] = income_categories.get(category, 0) + amount
+                elif _type == "Gider":
+                    expense_categories[category] = expense_categories.get(category, 0) + amount
+
+        if income_categories:
+            ax1.pie(income_categories.values(), labels=income_categories.keys(), autopct='%1.1f%%', startangle=90)
+            ax1.set_title('Gelir Kategorileri Dağılımı', fontsize=10)
+            ax1.axis('equal')  # Equal aspect ratio ensures that pie is drawn as a circle.
+        else:
+            ax1.text(0.5, 0.5, "Gelir Verisi Yok", horizontalalignment='center', verticalalignment='center',
+                     transform=ax1.transAxes)
+            ax1.set_title('Gelir Kategorileri Dağılımı (Veri Yok)', fontsize=10)
+
+        if expense_categories:
+            ax2.pie(expense_categories.values(), labels=expense_categories.keys(), autopct='%1.1f%%', startangle=90)
+            ax2.set_title('Gider Kategorileri Dağılımı', fontsize=10)
+            ax2.axis('equal')
+        else:
+            ax2.text(0.5, 0.5, "Gider Verisi Yok", horizontalalignment='center', verticalalignment='center',
+                     transform=ax2.transAxes)
+            ax2.set_title('Gider Kategorileri Dağılımı (Veri Yok)', fontsize=10)
+
+        plt.tight_layout()  # Grafikler arasındaki boşlukları ayarla
+        plt.show()  # Grafiği göster
+
+        # Kümülatif Bakiye Grafiği (Ayrı bir pencerede gösterilebilir)
+        fig_balance, ax_balance = plt.subplots(figsize=(10, 6))
+        dates = []
+        balances = []
+        current_balance = 0.0
+
+        # Tarih ve miktarları alıp sırala
+        sorted_transactions = sorted(zaman_verileri, key=lambda x: datetime.strptime(x[0], '%Y-%m-%d'))
+
+        for date_str, _type, amount in sorted_transactions:
+            date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+            if _type == "Gelir":
+                current_balance += amount
+            elif _type == "Gider":
+                current_balance -= amount
+            dates.append(date_obj)
+            balances.append(current_balance)
+
+        if dates:
+            ax_balance.plot(dates, balances, marker='o', linestyle='-', color='blue')
+            ax_balance.set_title('Zamanla Kümülatif Bakiye', fontsize=12)
+            ax_balance.set_xlabel('Tarih', fontsize=10)
+            ax_balance.set_ylabel('Bakiye (TL)', fontsize=10)
+            ax_balance.grid(True)
+            fig_balance.autofmt_xdate()  # Tarih etiketlerini eğ
+        else:
+            ax_balance.text(0.5, 0.5, "Bakiye Verisi Yok", horizontalalignment='center', verticalalignment='center',
+                            transform=ax_balance.transAxes)
+            ax_balance.set_title('Zamanla Kümülatif Bakiye (Veri Yok)', fontsize=12)
+
+        plt.tight_layout()
+        plt.show()
+
+    def rapor_olustur(self):
+        """Gelir-Gider Raporunu PDF olarak oluşturur."""
+        # Burada raporun içeriğini oluşturup PDFGenerator'a göndereceğiz
+        # Basit bir örnek rapor oluşturalım:
+        transactions = self.db_manager.get_transactions(self.kullanici_id)
+
+        report_data = {
+            "title": f"{self.username} Kullanıcısı İçin Gelir-Gider Raporu",
+            "sections": [
+                {"heading": "Tüm İşlemler", "data": [["ID", "Tür", "Miktar", "Kategori", "Açıklama", "Tarih"]]}
+            ]
+        }
+
+        for t in transactions:
+            report_data["sections"][0]["data"].append([str(x) for x in t])  # Tüm verileri stringe çevir
+
+        # Toplam gelir, gider, bakiye hesapla
+        toplam_gelir = sum(t[2] for t in transactions if t[1] == "Gelir")
+        toplam_gider = sum(t[2] for t in transactions if t[1] == "Gider")
+        bakiye = toplam_gelir - toplam_gider
+
+        report_data["sections"].append({
+            "heading": "Özet Bilgiler",
+            "data": [
+                ["Toplam Gelir:", f"₺{toplam_gelir:.2f}"],
+                ["Toplam Gider:", f"₺{toplam_gider:.2f}"],
+                ["Bakiye:", f"₺{bakiye:.2f}"]
+            ]
+        })
+
+        try:
+            # PDFGenerator'ı burada kullanıyoruz
+            pdf_path = self.pdf_generator.generate_general_report_pdf(report_data,
+                                                                      f"{self.username}_GelirGider_Raporu_{datetime.now().strftime('%Y%m%d%H%M%S')}.pdf")
+            messagebox.showinfo("Rapor Oluşturuldu", f"Gelir-Gider Raporu başarıyla oluşturuldu:\n{pdf_path}")
+            os.startfile(pdf_path)  # Oluşturulan PDF'i aç
+        except Exception as e:
+            messagebox.showerror("Hata", f"Rapor oluşturulurken bir hata oluştu: {e}")
+
+    # --- Fatura / Teklifler Sekmesi Fonksiyonları ---
     def _fatura_teklif_arayuzu_olustur(self, parent_frame):
         """Fatura/Teklif sekmesinin kullanıcı arayüzünü oluşturur."""
         fatura_teklif_frame = ttk.LabelFrame(parent_frame, text="Fatura / Teklif Oluştur ve Yönet", padding=15)
         fatura_teklif_frame.pack(pady=10, padx=0, fill="both", expand=True)
 
         fatura_teklif_frame.grid_columnconfigure(1, weight=1)
-        fatura_teklif_frame.grid_rowconfigure(11, weight=1)
+        # item_list_frame için expand vereceğiz, bu yüzden fatura_teklif_frame'in satırını genişletelim
+        fatura_teklif_frame.grid_rowconfigure(9,
+                                              weight=1)  # Ürün/Hizmetler listesinin olduğu satır. (Güncellenmiş index)
 
-        # Fatura/Teklif giriş alanları
-        fatura_input_widgets = [
+        # Fatura/Teklif giriş alanları (Güncellenmiş input_widgets listesi)
+        input_rows = [
             ("Tür:", "fatura_tur_var", ["Fatura", "Teklif"], "Combobox"),
             ("Belge No:", "belge_numarasi_entry", None, "Entry"),
-            ("Müşteri Adı:", "fatura_musteri_var", [], "Combobox"),  # Müşteriler dinamik yüklenecek
+            ("Müşteri Adı:", "fatura_musteri_var", [], "Combobox"),
             ("Belge Tarihi:", "fatura_belge_tarih_entry", None, "DateEntry"),
             ("Son Ödeme/Geçerlilik Tarihi:", "fatura_son_odeme_gecerlilik_tarih_entry", None, "DateEntry"),
-            ("Ürün/Hizmetler (Ad,Miktar,Fiyat,KDV% | her satırda bir kalem):", "fatura_urun_hizmetler_text", None,
-             "Text"),
-            ("Toplam Tutar (KDV Hariç ₺):", "fatura_kdv_haric_toplam_entry", None, "Entry"),
-            ("Toplam KDV (₺):", "fatura_toplam_kdv_entry", None, "Entry"),
-            ("Genel Toplam (₺):", "fatura_genel_toplam_entry", None, "Entry"),
-            ("Notlar:", "fatura_notlar_text", None, "Text"),
             ("Durum:", "fatura_durum_var", ["Taslak", "Gönderildi", "Ödendi", "İptal Edildi"], "Combobox"),
         ]
 
         current_row = 0
-        for label_text, var_name, values, widget_type in fatura_input_widgets:
+        for label_text, var_name, values, widget_type in input_rows:
             ttk.Label(fatura_teklif_frame, text=label_text).grid(row=current_row, column=0, padx=5, pady=2, sticky="nw")
 
             if widget_type == "Combobox":
@@ -470,33 +1058,25 @@ class GelirGiderUygulamasi:
                 setattr(self, var_name, var)
                 if var_name == "fatura_tur_var":
                     var.set("Fatura")
-                    cb.bind("<<ComboboxSelected>>",
-                            self._fatura_tur_secildi)  # Tür değiştiğinde belge numarası sıfırlama
+                    cb.bind("<<ComboboxSelected>>", self._fatura_tur_secildi)
                 if var_name == "fatura_durum_var":
                     var.set("Taslak")
                 if var_name == "fatura_musteri_var":
                     self.fatura_musteri_combobox = cb
+                    self.fatura_musteri_combobox.bind("<Button-1>",
+                                                      lambda e: self.listele_musteriler(self.fatura_musteri_combobox))
             elif widget_type == "Entry":
                 entry = ttk.Entry(fatura_teklif_frame, width=35)
                 entry.grid(row=current_row, column=1, padx=5, pady=2, sticky="ew")
                 setattr(self, var_name, entry)
                 if var_name == "belge_numarasi_entry":
-                    entry.config(state="readonly")  # Belge numarası manuel değiştirilemez
-                elif var_name in ["fatura_kdv_haric_toplam_entry", "fatura_toplam_kdv_entry",
-                                  "fatura_genel_toplam_entry"]:
-                    entry.config(state="readonly")  # Toplam tutarlar manuel değiştirilemez
+                    entry.config(state="readonly")
             elif widget_type == "DateEntry":
                 date_entry = DateEntry(fatura_teklif_frame, selectmode='day', date_pattern='yyyy-mm-dd', width=32,
                                        background='darkblue', foreground='white', borderwidth=2)
                 date_entry.grid(row=current_row, column=1, padx=5, pady=2, sticky="ew")
                 date_entry.set_date(datetime.now().strftime("%Y-%m-%d"))
                 setattr(self, var_name, date_entry)
-            elif widget_type == "Text":
-                text_widget = tk.Text(fatura_teklif_frame, height=4, width=35)
-                text_widget.grid(row=current_row, column=1, padx=5, pady=2, sticky="ew")
-                setattr(self, var_name, text_widget)
-                if var_name == "fatura_urun_hizmetler_text":
-                    text_widget.bind("<KeyRelease>", self._fatura_tutari_hesapla)  # Yazdıkça toplamları hesapla
             current_row += 1
 
         # Belge numarası oluşturma butonu
@@ -504,116 +1084,576 @@ class GelirGiderUygulamasi:
                                                                                                          column=2,
                                                                                                          padx=5, pady=2,
                                                                                                          sticky="w")
-
-        # Envanterden ürün seçme alanı
-        ttk.Label(fatura_teklif_frame, text="Envanterden Ürün Seç:").grid(row=current_row, column=0, padx=5, pady=2,
-                                                                          sticky="w")
+        # --- Ürün/Hizmet Ekleme Bölümü ---
+        ttk.Label(fatura_teklif_frame, text="Ürün/Hizmet Seç:").grid(row=current_row, column=0, padx=5, pady=2,
+                                                                     sticky="w")
         self.fatura_urun_sec_var = tk.StringVar()
         self.fatura_urun_sec_combobox = ttk.Combobox(fatura_teklif_frame, textvariable=self.fatura_urun_sec_var,
                                                      values=[], state="readonly", width=30)
         self.fatura_urun_sec_combobox.grid(row=current_row, column=1, padx=5, pady=2, sticky="ew")
-        ttk.Button(fatura_teklif_frame, text="Ekle", command=self.fatura_urun_ekle_envanterden).grid(row=current_row,
-                                                                                                     column=2, padx=5,
-                                                                                                     pady=2, sticky="w")
+        self.fatura_urun_sec_combobox.bind("<Button-1>", lambda e: self.listele_urunler(self.fatura_urun_sec_combobox))
+        self.fatura_urun_sec_combobox.bind("<<ComboboxSelected>>", self._fatura_urun_secildi)
+
+        ttk.Label(fatura_teklif_frame, text="Miktar:").grid(row=current_row, column=2, padx=5, pady=2, sticky="w")
+        self.fatura_urun_miktar_entry = ttk.Entry(fatura_teklif_frame, width=10)
+        self.fatura_urun_miktar_entry.grid(row=current_row, column=3, padx=5, pady=2, sticky="ew")
+        self.fatura_urun_miktar_entry.bind("<KeyRelease>", self._fatura_urun_tutari_hesapla)
+        current_row += 1
+
+        ttk.Label(fatura_teklif_frame, text="Birim Fiyat:").grid(row=current_row, column=0, padx=5, pady=2, sticky="w")
+        self.fatura_urun_birim_fiyat_entry = ttk.Entry(fatura_teklif_frame, width=10)
+        self.fatura_urun_birim_fiyat_entry.grid(row=current_row, column=1, padx=5, pady=2, sticky="ew")
+        self.fatura_urun_birim_fiyat_entry.bind("<KeyRelease>", self._fatura_urun_tutari_hesapla)
+
+        ttk.Label(fatura_teklif_frame, text="KDV Oranı (%):").grid(row=current_row, column=2, padx=5, pady=2,
+                                                                   sticky="w")
+        self.fatura_urun_kdv_oran_entry = ttk.Entry(fatura_teklif_frame, width=10)
+        self.fatura_urun_kdv_oran_entry.grid(row=current_row, column=3, padx=5, pady=2, sticky="ew")
+        self.fatura_urun_kdv_oran_entry.bind("<KeyRelease>", self._fatura_urun_tutari_hesapla)
+        current_row += 1
+
+        ttk.Label(fatura_teklif_frame, text="KDV Miktarı:").grid(row=current_row, column=0, padx=5, pady=2, sticky="w")
+        self.fatura_urun_kdv_miktar_label = ttk.Label(fatura_teklif_frame, text="0.00 ₺")
+        self.fatura_urun_kdv_miktar_label.grid(row=current_row, column=1, padx=5, pady=2, sticky="ew")
+
+        ttk.Label(fatura_teklif_frame, text="Ara Toplam:").grid(row=current_row, column=2, padx=5, pady=2, sticky="w")
+        self.fatura_urun_ara_toplam_label = ttk.Label(fatura_teklif_frame, text="0.00 ₺")
+        self.fatura_urun_ara_toplam_label.grid(row=current_row, column=3, padx=5, pady=2, sticky="ew")
+        current_row += 1
+
+        ttk.Button(fatura_teklif_frame, text="Kalemi Ekle", command=self.fatura_kalem_ekle).grid(row=current_row,
+                                                                                                 column=0, columnspan=4,
+                                                                                                 pady=5, sticky="ew")
+        current_row += 1
+
+        # Ürün/Hizmetler listesi (Treeview)
+        item_list_frame = ttk.Frame(fatura_teklif_frame, padding="5 0 0 0")
+        item_list_frame.grid(row=current_row, column=0, columnspan=4, sticky="nsew")  # Tüm sütunları kapla
+        current_row += 1
+
+        self.fatura_kalem_liste = ttk.Treeview(item_list_frame,
+                                               columns=("Ad", "Miktar", "Birim Fiyat", "KDV Oranı", "KDV Miktarı",
+                                                        "Ara Toplam"),
+                                               show="headings")
+        self.fatura_kalem_liste.heading("Ad", text="Ürün/Hizmet", anchor="w")
+        self.fatura_kalem_liste.column("Ad", width=150)
+        self.fatura_kalem_liste.heading("Miktar", text="Miktar", anchor="w")
+        self.fatura_kalem_liste.column("Miktar", width=70)
+        self.fatura_kalem_liste.heading("Birim Fiyat", text="Birim Fiyat (₺)", anchor="e")
+        self.fatura_kalem_liste.column("Birim Fiyat", width=100)
+        self.fatura_kalem_liste.heading("KDV Oranı", text="KDV %", anchor="e")
+        self.fatura_kalem_liste.column("KDV Oranı", width=70)
+        self.fatura_kalem_liste.heading("KDV Miktarı", text="KDV Miktar (₺)", anchor="e")
+        self.fatura_kalem_liste.column("KDV Miktarı", width=100)
+        self.fatura_kalem_liste.heading("Ara Toplam", text="Ara Toplam (₺)", anchor="e")
+        self.fatura_kalem_liste.column("Ara Toplam", width=120)
+        self.fatura_kalem_liste.pack(fill="both", expand=True)
+
+        kalem_scroll_y = ttk.Scrollbar(item_list_frame, orient="vertical", command=self.fatura_kalem_liste.yview)
+        self.fatura_kalem_liste.configure(yscrollcommand=kalem_scroll_y.set)
+        kalem_scroll_y.pack(side="right", fill="y")
+
+        ttk.Button(item_list_frame, text="Kalemi Çıkar", command=self.fatura_kalem_cikar).pack(pady=5)
+        self.current_invoice_items = []  # Fatura/Teklife eklenecek geçici kalemler listesi
+
+        # --- Toplamlar ve Notlar Bölümü ---
+        ttk.Label(fatura_teklif_frame, text="KDV Hariç Toplam (₺):").grid(row=current_row, column=0, padx=5, pady=2,
+                                                                          sticky="w")
+        self.fatura_kdv_haric_toplam_label = ttk.Label(fatura_teklif_frame, text="0.00", font=("Arial", 11, "bold"))
+        self.fatura_kdv_haric_toplam_label.grid(row=current_row, column=1, padx=5, pady=2, sticky="ew")
+        current_row += 1
+
+        ttk.Label(fatura_teklif_frame, text="Toplam KDV (₺):").grid(row=current_row, column=0, padx=5, pady=2,
+                                                                    sticky="w")
+        self.fatura_toplam_kdv_label = ttk.Label(fatura_teklif_frame, text="0.00", font=("Arial", 11, "bold"))
+        self.fatura_toplam_kdv_label.grid(row=current_row, column=1, padx=5, pady=2, sticky="ew")
+        current_row += 1
+
+        ttk.Label(fatura_teklif_frame, text="Genel Toplam (₺):").grid(row=current_row, column=0, padx=5, pady=2,
+                                                                      sticky="w")
+        self.fatura_genel_toplam_label = ttk.Label(fatura_teklif_frame, text="0.00", font=("Arial", 12, "bold"),
+                                                   foreground="blue")
+        self.fatura_genel_toplam_label.grid(row=current_row, column=1, padx=5, pady=2, sticky="ew")
+        current_row += 1
+
+        ttk.Label(fatura_teklif_frame, text="Notlar:").grid(row=current_row, column=0, padx=5, pady=2, sticky="nw")
+        self.fatura_notlar_text = tk.Text(fatura_teklif_frame, height=3, width=30)
+        self.fatura_notlar_text.grid(row=current_row, column=1, padx=5, pady=2, sticky="ew")
         current_row += 1
 
         # Fatura/Teklif butonları
         fatura_buton_frame = ttk.Frame(fatura_teklif_frame, padding="10 0 0 0")
-        fatura_buton_frame.grid(row=current_row, column=0, columnspan=3, pady=10, sticky="ew")
-
-        ttk.Button(fatura_buton_frame, text="Kaydet", command=self.fatura_kaydet).pack(side="left", padx=5, fill="x",
-                                                                                       expand=True)
-        ttk.Button(fatura_buton_frame, text="Güncelle", command=self.fatura_guncelle).pack(side="left", padx=5,
-                                                                                           fill="x", expand=True)
-        ttk.Button(fatura_buton_frame, text="PDF Oluştur", command=self.fatura_pdf_olustur).pack(side="left", padx=5,
-                                                                                                 fill="x", expand=True)
-        ttk.Button(fatura_buton_frame, text="Sil", command=self.fatura_sil).pack(side="left", padx=5, fill="x",
-                                                                                 expand=True)
-        ttk.Button(fatura_buton_frame, text="Temizle", command=self.fatura_temizle).pack(side="left", padx=5, fill="x",
-                                                                                         expand=True)
+        fatura_buton_frame.grid(row=current_row, column=0, columnspan=4, pady=10, sticky="ew")
+        ttk.Button(fatura_buton_frame, text="Kaydet", command=self.kaydet_fatura_teklif).pack(side="left", padx=5,
+                                                                                              fill="x", expand=True)
+        ttk.Button(fatura_buton_frame, text="Güncelle", command=self.guncelle_fatura_teklif).pack(side="left", padx=5,
+                                                                                                  fill="x", expand=True)
+        ttk.Button(fatura_buton_frame, text="Sil", command=self.sil_fatura_teklif).pack(side="left", padx=5, fill="x",
+                                                                                        expand=True)
+        ttk.Button(fatura_buton_frame, text="Temizle", command=self.temizle_fatura_teklif).pack(side="left", padx=5,
+                                                                                                fill="x", expand=True)
+        ttk.Button(fatura_buton_frame, text="PDF Oluştur", command=self.pdf_olustur_fatura_teklif).pack(side="left",
+                                                                                                        padx=5,
+                                                                                                        fill="x",
+                                                                                                        expand=True)
+        current_row += 1
 
         # Fatura/Teklif listesi (Treeview)
-        self.fatura_liste = ttk.Treeview(fatura_teklif_frame,
-                                         columns=("id", "Tür", "Belge No", "Müşteri", "Toplam", "KDV", "Genel Toplam",
-                                                  "Tarih", "Durum"), show="headings")
-        self.fatura_liste.heading("id", text="ID", anchor="w")
-        self.fatura_liste.column("id", width=30, minwidth=20, stretch=tk.NO)
-        self.fatura_liste.heading("Tür", text="Tür", anchor="w")
-        self.fatura_liste.column("Tür", width=60, minwidth=50, stretch=tk.NO)
-        self.fatura_liste.heading("Belge No", text="Belge No", anchor="w")
-        self.fatura_liste.column("Belge No", width=90, minwidth=70, stretch=tk.NO)
-        self.fatura_liste.heading("Müşteri", text="Müşteri Adı", anchor="w")
-        self.fatura_liste.column("Müşteri", width=100, minwidth=80)
-        self.fatura_liste.heading("Toplam", text="Toplam (₺)", anchor="e")  # Sağ hizalı
-        self.fatura_liste.column("Toplam", width=90, minwidth=70, stretch=tk.NO, anchor="e")
-        self.fatura_liste.heading("KDV", text="KDV (₺)", anchor="e")  # Sağ hizalı
-        self.fatura_liste.column("KDV", width=80, minwidth=60, stretch=tk.NO, anchor="e")
-        self.fatura_liste.heading("Genel Toplam", text="Genel Toplam (₺)", anchor="e")  # Sağ hizalı
-        self.fatura_liste.column("Genel Toplam", width=110, minwidth=90, stretch=tk.NO, anchor="e")
-        self.fatura_liste.heading("Tarih", text="Tarih", anchor="w")
-        self.fatura_liste.column("Tarih", width=90, minwidth=70, stretch=tk.NO)
-        self.fatura_liste.heading("Durum", text="Durum", anchor="w")
-        self.fatura_liste.column("Durum", width=80, minwidth=60, stretch=tk.NO)
+        fatura_liste_frame = ttk.Frame(parent_frame, padding="10 0 0 0")
+        fatura_liste_frame.pack(pady=10, padx=0, fill="both", expand=True)
 
-        self.fatura_liste.grid(row=current_row + 1, column=0, columnspan=3, sticky="nsew", padx=5, pady=5)
-        fatura_teklif_frame.grid_rowconfigure(current_row + 1, weight=1)
+        fatura_scroll_y = ttk.Scrollbar(fatura_liste_frame, orient="vertical")
+        fatura_scroll_x = ttk.Scrollbar(fatura_liste_frame, orient="horizontal")
 
-        # Fatura/Teklif listesi için kaydırma çubukları
-        fatura_scroll_y = ttk.Scrollbar(fatura_teklif_frame, orient="vertical", command=self.fatura_liste.yview)
-        fatura_scroll_x = ttk.Scrollbar(fatura_teklif_frame, orient="horizontal", command=self.fatura_liste.xview)
-        self.fatura_liste.configure(yscrollcommand=fatura_scroll_y.set, xscrollcommand=fatura_scroll_x.set)
+        self.fatura_teklif_liste = ttk.Treeview(fatura_liste_frame,
+                                                columns=("id", "Tip", "Belge No", "Müşteri", "KDV Hariç", "Toplam KDV",
+                                                         "Genel Toplam", "Tarih", "Durum"),
+                                                show="headings",
+                                                yscrollcommand=fatura_scroll_y.set,
+                                                xscrollcommand=fatura_scroll_x.set)
 
-        fatura_scroll_y.grid(row=current_row + 1, column=3, sticky="ns")
-        fatura_scroll_x.grid(row=current_row + 2, column=0, columnspan=3, sticky="ew")
+        fatura_scroll_y.config(command=self.fatura_teklif_liste.yview)
+        fatura_scroll_x.config(command=self.fatura_teklif_liste.xview)
 
-        self.fatura_liste.bind("<<TreeviewSelect>>", self.fatura_liste_secildi)
+        fatura_columns_info = {
+            "id": {"text": "ID", "width": 40},
+            "Tip": {"text": "Tip", "width": 60},
+            "Belge No": {"text": "Belge No", "width": 120},
+            "Müşteri": {"text": "Müşteri", "width": 150},
+            "KDV Hariç": {"text": "KDV Hariç (₺)", "width": 100},
+            "Toplam KDV": {"text": "Toplam KDV (₺)", "width": 100},
+            "Genel Toplam": {"text": "Genel Toplam (₺)", "width": 120},
+            "Tarih": {"text": "Tarih", "width": 90},
+            "Durum": {"text": "Durum", "width": 90}
+        }
 
+        for col_name, info in fatura_columns_info.items():
+            self.fatura_teklif_liste.heading(col_name, text=info["text"], anchor="w")
+            self.fatura_teklif_liste.column(col_name, width=info["width"], stretch=tk.NO)
+
+        self.fatura_teklif_liste.grid(row=0, column=0, sticky="nsew")
+        fatura_scroll_y.grid(row=0, column=1, sticky="ns")
+        fatura_scroll_x.grid(row=1, column=0, sticky="ew")
+
+        fatura_liste_frame.grid_rowconfigure(0, weight=1)
+        fatura_liste_frame.grid_columnconfigure(0, weight=1)
+
+        self.fatura_teklif_liste.bind("<<TreeviewSelect>>", self.fatura_teklif_liste_secildi)
+
+    # Fatura/Teklif Fonksiyonları
+    def _fatura_tur_secildi(self, event=None):
+        """Fatura/Teklif türü değiştiğinde belge numarasını günceller."""
+        self.belge_numarasi_olustur()  # Yeni numara oluştur
+
+    def belge_numarasi_olustur(self):
+        """Yeni belge numarası oluşturur."""
+        doc_type = self.fatura_tur_var.get()
+        current_invoice_num, current_offer_num = self.db_manager.get_user_invoice_offer_nums(self.kullanici_id)
+
+        prefix = ""
+        num = 0
+        if doc_type == "Fatura":
+            prefix = "FTR-"
+            num = current_invoice_num + 1
+        elif doc_type == "Teklif":
+            prefix = "TKLF-"
+            num = current_offer_num + 1
+
+        year = datetime.now().year
+        self.belge_numarasi_entry.config(state="normal")  # Yazılabilir yap
+        self.belge_numarasi_entry.delete(0, tk.END)
+        self.belge_numarasi_entry.insert(0, f"{prefix}{year}-{num:05d}")
+        self.belge_numarasi_entry.config(state="readonly")  # Tekrar sadece okunabilir yap
+
+    def _fatura_urun_secildi(self, event=None):
+        """Envanterden ürün seçildiğinde birim fiyat ve KDV oranını doldurur."""
+        selected_product_name = self.fatura_urun_sec_var.get()
+        product_info = self.db_manager.get_product_by_name(selected_product_name, self.kullanici_id)
+
+        if product_info:
+            # product_info formatı: (id, name, stock_quantity, purchase_price, selling_price, kdv_rate)
+            selling_price = product_info[4]
+            kdv_rate = product_info[5]
+
+            self.fatura_urun_birim_fiyat_entry.delete(0, tk.END)
+            self.fatura_urun_birim_fiyat_entry.insert(0, f"{selling_price:.2f}")
+
+            self.fatura_urun_kdv_oran_entry.delete(0, tk.END)
+            self.fatura_urun_kdv_oran_entry.insert(0, f"{kdv_rate:.2f}")
+
+            self._fatura_urun_tutari_hesapla()  # Miktar boş olsa da sıfır olarak hesaplar
+
+    def _fatura_urun_tutari_hesapla(self, event=None):
+        """Ürün miktarı/fiyatı/KDV oranı değiştiğinde ara toplam ve KDV miktarını hesaplar."""
+        try:
+            miktar = float(self.fatura_urun_miktar_entry.get() or 0)
+            birim_fiyat = float(self.fatura_urun_birim_fiyat_entry.get() or 0)
+            kdv_oran = float(self.fatura_urun_kdv_oran_entry.get() or 0)
+
+            ara_toplam_kdv_haric = miktar * birim_fiyat
+            kdv_miktar = ara_toplam_kdv_haric * (kdv_oran / 100)
+
+            self.fatura_urun_kdv_miktar_label.config(text=f"{kdv_miktar:.2f} ₺")
+            self.fatura_urun_ara_toplam_label.config(text=f"{ara_toplam_kdv_haric:.2f} ₺")
+
+        except ValueError:
+            self.fatura_urun_kdv_miktar_label.config(text="Hata")
+            self.fatura_urun_ara_toplam_label.config(text="Hata")
+
+    def fatura_kalem_ekle(self):
+        """Fatura/Teklife yeni kalem ekler."""
+        urun_adi = self.fatura_urun_sec_var.get()
+        miktar_str = self.fatura_urun_miktar_entry.get()
+        birim_fiyat_str = self.fatura_urun_birim_fiyat_entry.get()
+        kdv_oran_str = self.fatura_urun_kdv_oran_entry.get()
+
+        if not urun_adi or not miktar_str or not birim_fiyat_str or not kdv_oran_str:
+            self.show_error("Hata", "Lütfen tüm kalem alanlarını doldurun.")
+            return
+
+        try:
+            miktar = float(miktar_str)
+            birim_fiyat = float(birim_fiyat_str)
+            kdv_oran = float(kdv_oran_str)
+            if miktar <= 0 or birim_fiyat <= 0 or kdv_oran < 0:
+                self.show_error("Hata", "Miktar ve birim fiyat pozitif, KDV oranı negatif olamaz.")
+                return
+        except ValueError:
+            self.show_error("Hata", "Miktar, birim fiyat ve KDV oranı geçerli sayılar olmalıdır.")
+            return
+
+        # Ürünün stok miktarını kontrol et (Sadece faturalar için)
+        if self.fatura_tur_var.get() == "Fatura":
+            product_info = self.db_manager.get_product_by_name(urun_adi, self.kullanici_id)
+            if product_info:
+                current_stock = product_info[2]
+                if miktar > current_stock:
+                    messagebox.showwarning("Stok Uyarısı",
+                                           f"'{urun_adi}' için yeterli stok yok. Mevcut stok: {current_stock}. Yine de ekleniyor.")
+
+        kdv_miktar = birim_fiyat * miktar * (kdv_oran / 100)
+        ara_toplam = birim_fiyat * miktar
+
+        item_data = {
+            "ad": urun_adi,
+            "miktar": miktar,
+            "birim_fiyat": birim_fiyat,
+            "kdv_orani": kdv_oran,
+            "kdv_miktari": kdv_miktar,
+            "ara_toplam": ara_toplam
+        }
+        self.current_invoice_items.append(item_data)
+        self.update_fatura_kalem_liste()
+        self.temizle_fatura_kalemleri()
+        self.fatura_toplamlari_hesapla()
+
+    def fatura_kalem_cikar(self):
+        """Fatura/Tekliften seçili kalemi çıkarır."""
+        selected_item = self.fatura_kalem_liste.focus()
+        if not selected_item:
+            self.show_error("Hata", "Lütfen çıkarılacak bir kalem seçin.")
+            return
+
+        item_index = self.fatura_kalem_liste.index(selected_item)
+        if messagebox.askyesno("Kalem Çıkar", "Seçili kalemi çıkarmak istediğinize emin misiniz?"):
+            del self.current_invoice_items[item_index]
+            self.update_fatura_kalem_liste()
+            self.fatura_toplamlari_hesapla()
+
+    def update_fatura_kalem_liste(self):
+        """Fatura/Teklif kalem listesini günceller."""
+        for i in self.fatura_kalem_liste.get_children():
+            self.fatura_kalem_liste.delete(i)
+
+        for item in self.current_invoice_items:
+            self.fatura_kalem_liste.insert("", "end", values=(
+                item["ad"],
+                item["miktar"],
+                f"{item['birim_fiyat']:.2f}",
+                f"{item['kdv_orani']:.2f}",
+                f"{item['kdv_miktari']:.2f}",
+                f"{item['ara_toplam']:.2f}"
+            ))
+
+    def temizle_fatura_kalemleri(self):
+        """Fatura/Teklif kalem giriş alanlarını temizler."""
+        self.fatura_urun_sec_var.set("")
+        self.fatura_urun_miktar_entry.delete(0, tk.END)
+        self.fatura_urun_birim_fiyat_entry.delete(0, tk.END)
+        self.fatura_urun_kdv_oran_entry.delete(0, tk.END)
+        self.fatura_urun_kdv_miktar_label.config(text="0.00 ₺")
+        self.fatura_urun_ara_toplam_label.config(text="0.00 ₺")
+
+    def fatura_toplamlari_hesapla(self):
+        """Fatura/Teklifin genel toplamlarını hesaplar ve günceller."""
+        toplam_kdv_haric = sum(item["ara_toplam"] for item in self.current_invoice_items)
+        toplam_kdv = sum(item["kdv_miktari"] for item in self.current_invoice_items)
+        genel_toplam = toplam_kdv_haric + toplam_kdv
+
+        self.fatura_kdv_haric_toplam_label.config(text=f"{toplam_kdv_haric:.2f} ₺")
+        self.fatura_toplam_kdv_label.config(text=f"{toplam_kdv:.2f} ₺")
+        self.fatura_genel_toplam_label.config(text=f"{genel_toplam:.2f} ₺")
+
+    def kaydet_fatura_teklif(self):
+        """Yeni bir fatura veya teklif kaydeder."""
+        tur = self.fatura_tur_var.get()
+        belge_numarasi = self.belge_numarasi_entry.get()
+        musteri_adi = self.fatura_musteri_var.get()
+        belge_tarihi = self.fatura_belge_tarih_entry.get()
+        son_odeme_gecerlilik_tarihi = self.fatura_son_odeme_gecerlilik_tarih_entry.get()
+        notlar = self.fatura_notlar_text.get("1.0", tk.END).strip()
+        durum = self.fatura_durum_var.get()
+
+        if not tur or not belge_numarasi or not musteri_adi or not belge_tarihi or not son_odeme_gecerlilik_tarihi or not durum:
+            self.show_error("Hata", "Lütfen tüm belge bilgilerini doldurun.")
+            return
+
+        if not self.current_invoice_items:
+            self.show_error("Hata", "Lütfen belgeye en az bir kalem ekleyin.")
+            return
+
+        if self.db_manager.check_belge_numarasi_exists(belge_numarasi, self.kullanici_id):
+            self.show_error("Hata", f"'{belge_numarasi}' numaralı belge zaten mevcut. Lütfen başka bir numara girin.")
+            return
+
+        toplam_kdv_haric = sum(item["ara_toplam"] for item in self.current_invoice_items)
+        toplam_kdv = sum(item["kdv_miktari"] for item in self.current_invoice_items)
+        urun_hizmetler_json = json.dumps(self.current_invoice_items)
+
+        self.db_manager.insert_invoice_offer(tur, belge_numarasi, musteri_adi, belge_tarihi,
+                                             son_odeme_gecerlilik_tarihi,
+                                             urun_hizmetler_json, toplam_kdv_haric, toplam_kdv, notlar, durum,
+                                             self.kullanici_id)
+
+        # Belge numaralarını güncelle
+        if tur == "Fatura":
+            current_invoice_num, _ = self.db_manager.get_user_invoice_offer_nums(self.kullanici_id)
+            self.db_manager.update_user_invoice_offer_num(self.kullanici_id, invoice_num=current_invoice_num + 1)
+        elif tur == "Teklif":
+            _, current_offer_num = self.db_manager.get_user_invoice_offer_nums(self.kullanici_id)
+            self.db_manager.update_user_invoice_offer_num(self.kullanici_id, offer_num=current_offer_num + 1)
+
+        # Stokları güncelle (sadece fatura eklendiğinde ve ürünler envanterden düşüldüğünde)
+        if tur == "Fatura":
+            for item in self.current_invoice_items:
+                product_name = item["ad"]
+                quantity = item["miktar"]
+                product_info = self.db_manager.get_product_by_name(product_name, self.kullanici_id)
+                if product_info:
+                    product_id = product_info[0]
+                    current_stock = product_info[2]
+                    new_stock = current_stock - quantity
+                    self.db_manager.update_product_stock(product_id, new_stock)
+            self.listele_urunler()  # Ürün listesini güncelle
+
+        self.show_message("Başarılı", f"{tur} başarıyla eklendi.")
+        self.listele_fatura_teklifler()
+        self.temizle_fatura_teklif()
+        self.belge_numarasi_olustur()  # Yeni belge numarası için önek ve sayı
+
+    def guncelle_fatura_teklif(self):
+        """Mevcut bir fatura veya teklifi günceller."""
+        if not self.selected_invoice_id:
+            self.show_warning("Uyarı", "Lütfen güncellemek için bir belge seçin.")
+            return
+
+        tur = self.fatura_tur_var.get()
+        belge_numarasi = self.belge_numarasi_entry.get()
+        musteri_adi = self.fatura_musteri_var.get()
+        belge_tarihi = self.fatura_belge_tarih_entry.get()
+        son_odeme_gecerlilik_tarihi = self.fatura_son_odeme_gecerlilik_tarih_entry.get()
+        notlar = self.fatura_notlar_text.get("1.0", tk.END).strip()
+        durum = self.fatura_durum_var.get()
+
+        if not tur or not belge_numarasi or not musteri_adi or not belge_tarihi or not son_odeme_gecerlilik_tarihi or not durum:
+            self.show_error("Hata", "Lütfen tüm belge bilgilerini doldurun.")
+            return
+
+        if not self.current_invoice_items:
+            self.show_error("Hata", "Lütfen belgeye en az bir kalem ekleyin.")
+            return
+
+        # Belge numarasının kendisi hariç başka bir belgede kullanılıp kullanılmadığını kontrol et
+        existing_doc = self.db_manager.get_invoice_offer_by_id(self.selected_invoice_id, self.kullanici_id)
+        if existing_doc and existing_doc[2] != belge_numarasi:  # Eğer belge numarası değiştiyse
+            if self.db_manager.check_belge_numarasi_exists(belge_numarasi, self.kullanici_id):
+                self.show_error("Hata",
+                                f"'{belge_numarasi}' numaralı belge başka bir belgede zaten mevcut. Lütfen başka bir numara girin.")
+                return
+
+        toplam_kdv_haric = sum(item["ara_toplam"] for item in self.current_invoice_items)
+        toplam_kdv = sum(item["kdv_miktari"] for item in self.current_invoice_items)
+        urun_hizmetler_json = json.dumps(self.current_invoice_items)
+
+        self.db_manager.update_invoice_offer(self.selected_invoice_id, tur, belge_numarasi, musteri_adi, belge_tarihi,
+                                             son_odeme_gecerlilik_tarihi,
+                                             urun_hizmetler_json, toplam_kdv_haric, toplam_kdv, notlar, durum,
+                                             self.kullanici_id)
+
+        # Stokları güncelleme mantığı burada daha karmaşık olabilir (eski ve yeni kalemleri karşılaştırma)
+        # Basit bir yaklaşım olarak, fatura güncellendiğinde stokları manuel olarak düzeltmek gerekebilir.
+        # Bu kısım daha gelişmiş bir envanter yönetimi gerektirir.
+
+        self.show_message("Başarılı", f"{tur} başarıyla güncellendi.")
+        self.listele_fatura_teklifler()
+        self.temizle_fatura_teklif()
+        self.selected_invoice_id = None
+
+    def sil_fatura_teklif(self):
+        """Seçili fatura veya teklifi siler."""
+        if not self.selected_invoice_id:
+            self.show_warning("Uyarı", "Lütfen silmek için bir belge seçin.")
+            return
+
+        item_values = self.fatura_teklif_liste.item(self.selected_invoice_id, "values")
+        doc_id = item_values[0]
+        doc_type = item_values[1]
+        doc_number = item_values[2]
+
+        if messagebox.askyesno("Onay",
+                               f"'{doc_number}' numaralı {doc_type} belgesini silmek istediğinizden emin misiniz?"):
+            # Fatura silindiğinde stokları geri ekle (sadece Fatura ise)
+            if doc_type == "Fatura":
+                doc_detail = self.db_manager.get_invoice_offer_by_id(doc_id, self.kullanici_id)
+                if doc_detail:
+                    items = json.loads(doc_detail[6])  # items_json sütunu 6. indekste
+                    for item in items:
+                        product_name = item["ad"]
+                        quantity = item["miktar"]
+                        product_info = self.db_manager.get_product_by_name(product_name, self.kullanici_id)
+                        if product_info:
+                            product_id = product_info[0]
+                            current_stock = product_info[2]
+                            new_stock = current_stock + quantity  # Stokları geri ekle
+                            self.db_manager.update_product_stock(product_id, new_stock)
+                    self.listele_urunler()  # Ürün listesini güncelle
+
+            self.db_manager.delete_invoice_offer(doc_id, self.kullanici_id)
+            self.show_message("Başarılı", "Belge başarıyla silindi.")
+            self.listele_fatura_teklifler()
+            self.temizle_fatura_teklif()
+            self.belge_numarasi_olustur()  # Belge numaralarını yeniden oluştur
+            self.selected_invoice_id = None
+
+    def temizle_fatura_teklif(self):
+        """Fatura/Teklif giriş alanlarını ve kalemleri temizler."""
+        self.fatura_tur_var.set("Fatura")
+        self.belge_numarasi_olustur()  # Varsayılan belge numarasını getir
+        self.fatura_musteri_var.set("")
+        self.fatura_belge_tarih_entry.set_date(datetime.now())
+        self.fatura_son_odeme_gecerlilik_tarih_entry.set_date(
+            datetime.now() + timedelta(days=30))  # Varsayılan 30 gün sonra
+        self.fatura_notlar_text.delete("1.0", tk.END)
+        self.fatura_durum_var.set("Taslak")
+
+        self.temizle_fatura_kalemleri()
+        self.current_invoice_items = []
+        self.update_fatura_kalem_liste()
+        self.fatura_toplamlari_hesapla()
+        self.selected_invoice_id = None
+        self.fatura_teklif_liste.selection_remove(self.fatura_teklif_liste.selection())
+
+    def listele_fatura_teklifler(self):
+        """Tüm fatura ve teklifleri veritabanından çeker ve Treeview'da listeler."""
+        for i in self.fatura_teklif_liste.get_children():
+            self.fatura_teklif_liste.delete(i)
+
+        invoice_offers = self.db_manager.get_invoice_offers(self.kullanici_id)
+        for doc in invoice_offers:
+            # doc formatı: (id, type, document_number, customer_name, total_amount_excluding_kdv, total_kdv_amount, general_total, document_date, status)
+            self.fatura_teklif_liste.insert("", "end", values=(
+                doc[0], doc[1], doc[2], doc[3], f"{doc[4]:.2f}", f"{doc[5]:.2f}", f"{doc[6]:.2f}", doc[7], doc[8]
+            ))
+
+    def fatura_teklif_liste_secildi(self, event):
+        """Fatura/Teklif Treeview'da bir satır seçildiğinde giriş alanlarını doldurur."""
+        selected_item = self.fatura_teklif_liste.focus()
+        if selected_item:
+            self.selected_invoice_id = self.fatura_teklif_liste.item(selected_item, "values")[0]
+            doc_detail = self.db_manager.get_invoice_offer_by_id(self.selected_invoice_id, self.kullanici_id)
+
+            if doc_detail:
+                # doc_detail formatı: (id, type, document_number, customer_name, document_date, due_validity_date, items_json, total_amount_excluding_kdv, total_kdv_amount, notes, status, user_id)
+                self.temizle_fatura_teklif()  # Önce temizle
+
+                self.fatura_tur_var.set(doc_detail[1])
+                self.belge_numarasi_entry.config(state="normal")
+                self.belge_numarasi_entry.insert(0, doc_detail[2])
+                self.belge_numarasi_entry.config(state="readonly")
+                self.fatura_musteri_var.set(doc_detail[3])
+                self.fatura_belge_tarih_entry.set_date(doc_detail[4])
+                self.fatura_son_odeme_gecerlilik_tarih_entry.set_date(doc_detail[5])
+                self.fatura_notlar_text.insert("1.0", doc_detail[9] or "")
+                self.fatura_durum_var.set(doc_detail[10])
+
+                self.current_invoice_items = json.loads(doc_detail[6])  # JSON'ı tekrar listeye çevir
+                self.update_fatura_kalem_liste()
+                self.fatura_toplamlari_hesapla()
+        else:
+            self.temizle_fatura_teklif()
+
+    def pdf_olustur_fatura_teklif(self):
+        """Seçili fatura veya teklifin PDF'ini oluşturur."""
+        if not self.selected_invoice_id:
+            self.show_error("Hata", "Lütfen PDF oluşturulacak bir belge seçin.")
+            return
+
+        doc_detail = self.db_manager.get_invoice_offer_by_id(self.selected_invoice_id, self.kullanici_id)
+
+        if doc_detail:
+            try:
+                file_path = self.pdf_generator.generate_document_pdf(doc_detail)
+                self.show_message("PDF Oluşturuldu", f"PDF başarıyla oluşturuldu:\n{file_path}")
+                os.startfile(file_path)  # PDF'i otomatik aç
+            except Exception as e:
+                self.show_error("PDF Hatası", f"PDF oluşturulurken bir hata oluştu: {e}")
+        else:
+            self.show_error("Hata", "Belge detayları bulunamadı.")
+
+    # --- Müşteri Yönetimi Sekmesi Fonksiyonları ---
     def _musteri_yonetimi_arayuzu_olustur(self, parent_frame):
-        """Müşteri yönetimi sekmesinin kullanıcı arayüzünü oluşturur."""
-        musteri_giris_frame = ttk.LabelFrame(parent_frame, text="Yeni Müşteri Ekle / Düzenle", padding=15)
-        musteri_giris_frame.pack(pady=10, padx=0, fill="x", expand=False)
-        musteri_giris_frame.grid_columnconfigure(1, weight=1)
+        """Müşteri yönetimi sekmesinin arayüzünü oluşturur."""
+        musteri_frame = ttk.LabelFrame(parent_frame, text="Müşteri Ekle / Düzenle / Sil", padding=15)
+        musteri_frame.pack(pady=10, padx=0, fill="x", expand=False)
 
-        # Müşteri giriş alanları
-        ttk.Label(musteri_giris_frame, text="Müşteri Adı:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
-        self.musteri_adi_entry = ttk.Entry(musteri_giris_frame, width=40)
-        self.musteri_adi_entry.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        musteri_frame.grid_columnconfigure(1, weight=1)
 
-        ttk.Label(musteri_giris_frame, text="Adres:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
-        self.musteri_adres_entry = ttk.Entry(musteri_giris_frame, width=40)
-        self.musteri_adres_entry.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
+        input_widgets = [
+            ("Ad/Unvan:", "musteri_ad_entry", None, "Entry"),
+            ("Adres:", "musteri_adres_entry", None, "Entry"),
+            ("Telefon:", "musteri_telefon_entry", None, "Entry"),
+            ("E-posta:", "musteri_eposta_entry", None, "Entry"),
+        ]
 
-        ttk.Label(musteri_giris_frame, text="Telefon:").grid(row=2, column=0, padx=5, pady=5, sticky="w")
-        self.musteri_telefon_entry = ttk.Entry(musteri_giris_frame, width=40)
-        self.musteri_telefon_entry.grid(row=2, column=1, padx=5, pady=5, sticky="ew")
-
-        ttk.Label(musteri_giris_frame, text="E-posta:").grid(row=3, column=0, padx=5, pady=5, sticky="w")
-        self.musteri_email_entry = ttk.Entry(musteri_giris_frame, width=40)
-        self.musteri_email_entry.grid(row=3, column=1, padx=5, pady=5, sticky="ew")
+        for i, (label_text, var_name, values, widget_type) in enumerate(input_widgets):
+            ttk.Label(musteri_frame, text=label_text).grid(row=i, column=0, padx=10, pady=5, sticky="w")
+            entry = ttk.Entry(musteri_frame, width=40)
+            entry.grid(row=i, column=1, padx=10, pady=5, sticky="ew")
+            setattr(self, var_name, entry)
 
         # Müşteri butonları
-        musteri_buton_frame = ttk.Frame(musteri_giris_frame, padding="10 0 0 0")
-        musteri_buton_frame.grid(row=4, column=0, columnspan=2, pady=10, sticky="ew")
-        ttk.Button(musteri_buton_frame, text="Kaydet", command=self.musteri_ekle).pack(side="left", padx=5, fill="x",
-                                                                                       expand=True)
-        ttk.Button(musteri_buton_frame, text="Güncelle", command=self.musteri_guncelle).pack(side="left", padx=5,
+        musteri_buton_frame = ttk.Frame(musteri_frame, padding="10 0 0 0")
+        musteri_buton_frame.grid(row=len(input_widgets), column=0, columnspan=2, pady=10, sticky="ew")
+
+        ttk.Button(musteri_buton_frame, text="Müşteri Ekle", command=self.musteri_ekle).pack(side="left", padx=5,
                                                                                              fill="x", expand=True)
-        ttk.Button(musteri_buton_frame, text="Sil", command=self.musteri_sil).pack(side="left", padx=5, fill="x",
-                                                                                   expand=True)
+        ttk.Button(musteri_buton_frame, text="Müşteri Güncelle", command=self.musteri_guncelle).pack(side="left",
+                                                                                                     padx=5, fill="x",
+                                                                                                     expand=True)
+        ttk.Button(musteri_buton_frame, text="Müşteri Sil", command=self.musteri_sil).pack(side="left", padx=5,
+                                                                                           fill="x", expand=True)
         ttk.Button(musteri_buton_frame, text="Temizle", command=self.temizle_musteri).pack(side="left", padx=5,
                                                                                            fill="x", expand=True)
 
         # Müşteri listesi (Treeview)
         musteri_liste_frame = ttk.Frame(parent_frame, padding="10 0 0 0")
         musteri_liste_frame.pack(pady=10, padx=0, fill="both", expand=True)
-        musteri_liste_frame.grid_rowconfigure(0, weight=1)
-        musteri_liste_frame.grid_columnconfigure(0, weight=1)
 
         musteri_scroll_y = ttk.Scrollbar(musteri_liste_frame, orient="vertical")
         musteri_scroll_x = ttk.Scrollbar(musteri_liste_frame, orient="horizontal")
 
         self.musteri_liste = ttk.Treeview(musteri_liste_frame,
-                                          columns=("id", "Müşteri Adı", "Adres", "Telefon", "E-posta"),
+                                          columns=("id", "Ad/Unvan", "Adres", "Telefon", "E-posta"),
                                           show="headings",
                                           yscrollcommand=musteri_scroll_y.set,
                                           xscrollcommand=musteri_scroll_x.set)
@@ -621,13 +1661,12 @@ class GelirGiderUygulamasi:
         musteri_scroll_y.config(command=self.musteri_liste.yview)
         musteri_scroll_x.config(command=self.musteri_liste.xview)
 
-        # Müşteri sütun başlıkları ve genişlikleri
         musteri_columns_info = {
-            "id": {"text": "ID", "width": 40, "minwidth": 30},
-            "Müşteri Adı": {"text": "Müşteri Adı", "width": 150, "minwidth": 120},
-            "Adres": {"text": "Adres", "width": 250, "minwidth": 200},
-            "Telefon": {"text": "Telefon", "width": 120, "minwidth": 100},
-            "E-posta": {"text": "E-posta", "width": 200, "minwidth": 150}
+            "id": {"text": "ID", "width": 50, "minwidth": 40},
+            "Ad/Unvan": {"text": "Ad/Unvan", "width": 150, "minwidth": 100},
+            "Adres": {"text": "Adres", "width": 200, "minwidth": 150},
+            "Telefon": {"text": "Telefon", "width": 100, "minwidth": 90},
+            "E-posta": {"text": "E-posta", "width": 150, "minwidth": 120}
         }
 
         for col_name, info in musteri_columns_info.items():
@@ -638,60 +1677,179 @@ class GelirGiderUygulamasi:
         musteri_scroll_y.grid(row=0, column=1, sticky="ns")
         musteri_scroll_x.grid(row=1, column=0, sticky="ew")
 
+        musteri_liste_frame.grid_rowconfigure(0, weight=1)
+        musteri_liste_frame.grid_columnconfigure(0, weight=1)
+
         self.musteri_liste.bind("<<TreeviewSelect>>", self.musteri_liste_secildi)
 
+    def musteri_ekle(self):
+        ad = self.musteri_ad_entry.get().strip()
+        adres = self.musteri_adres_entry.get()
+        telefon = self.musteri_telefon_entry.get()
+        eposta = self.musteri_eposta_entry.get()
+
+        if not ad:
+            self.show_error("Hata", "Lütfen müşteri adı/unvanı girin.")
+            return
+
+        if self.db_manager.get_customer_by_name(ad, self.kullanici_id):
+            self.show_error("Hata", f"'{ad}' adında bir müşteri zaten mevcut.")
+            return
+
+        self.db_manager.insert_customer(ad, adres, telefon, eposta, self.kullanici_id)
+        self.show_message("Başarılı", f"'{ad}' müşterisi başarıyla eklendi.")
+        self.listele_musteriler()
+        self.temizle_musteri()
+
+    def musteri_guncelle(self):
+        if not self.selected_customer_id:
+            self.show_warning("Uyarı", "Lütfen güncellemek için bir müşteri seçin.")
+            return
+
+        ad = self.musteri_ad_entry.get().strip()
+        adres = self.musteri_adres_entry.get()
+        telefon = self.musteri_telefon_entry.get()
+        eposta = self.musteri_eposta_entry.get()
+
+        if not ad:
+            self.show_error("Hata", "Lütfen müşteri adı/unvanı girin.")
+            return
+
+        # Eğer ad değiştiyse ve yeni ad zaten varsa hata ver
+        old_name = self.musteri_liste.item(self.selected_customer_id, "values")[1]
+        if ad != old_name and self.db_manager.get_customer_by_name(ad, self.kullanici_id):
+            self.show_error("Hata", f"'{ad}' adında başka bir müşteri zaten mevcut.")
+            return
+
+        self.db_manager.update_customer(self.selected_customer_id, ad, adres, telefon, eposta, self.kullanici_id)
+        self.show_message("Başarılı", f"'{ad}' müşterisi başarıyla güncellendi.")
+        self.listele_musteriler()
+        self.temizle_musteri()
+        self.selected_customer_id = None
+
+        # Fatura/tekliflerdeki müşteri adını güncelle (eğer müşteri adı değiştiyse)
+        if ad != old_name:
+            self.db_manager.update_invoice_customer_name(old_name, ad, self.kullanici_id)
+            self.listele_fatura_teklifler()
+
+    def musteri_sil(self):
+        if not self.selected_customer_id:
+            self.show_warning("Uyarı", "Lütfen silmek için bir müşteri seçin.")
+            return
+
+        item_values = self.musteri_liste.item(self.selected_customer_id, "values")
+        customer_name = item_values[1]
+
+        # Bu müşterinin kullanıldığı fatura/teklif var mı kontrol et
+        invoice_count = self.db_manager.count_invoices_by_customer(customer_name, self.kullanici_id)
+        if invoice_count > 0:
+            self.show_error("Hata",
+                            f"Bu müşteriye ait {invoice_count} adet fatura/teklif mevcut. Önce bunları silmelisiniz.")
+            return
+
+        if messagebox.askyesno("Onay", f"Seçili müşteriyi ('{customer_name}') silmek istediğinizden emin misiniz?"):
+            self.db_manager.delete_customer(self.selected_customer_id, self.kullanici_id)
+            self.show_message("Başarılı", "Müşteri başarıyla silindi.")
+            self.listele_musteriler()
+            self.temizle_musteri()
+            self.selected_customer_id = None
+
+    def temizle_musteri(self):
+        self.musteri_ad_entry.delete(0, tk.END)
+        self.musteri_adres_entry.delete(0, tk.END)
+        self.musteri_telefon_entry.delete(0, tk.END)
+        self.musteri_eposta_entry.delete(0, tk.END)
+        self.selected_customer_id = None
+        self.musteri_liste.selection_remove(self.musteri_liste.selection())
+
+    def listele_musteriler(self, combobox_widget=None):
+        """Müşterileri veritabanından çeker ve Treeview'da/Combobox'ta listeler."""
+        musteriler = self.db_manager.get_customers(self.kullanici_id)
+
+        if combobox_widget:  # Eğer bir combobox widget'ı belirtildiyse sadece onu güncelle
+            musteri_adlari = [m[1] for m in musteriler]
+            combobox_widget['values'] = musteri_adlari
+            if not combobox_widget.get() in musteri_adlari:
+                combobox_widget.set("")  # Eğer seçili müşteri yoksa veya kaldırıldıysa temizle
+            return
+
+        # Treeview'ı güncelle
+        for i in self.musteri_liste.get_children():
+            self.musteri_liste.delete(i)
+        for row in musteriler:
+            self.musteri_liste.insert("", "end", values=row)
+
+        # Fatura/Teklif ekranındaki müşteri combobox'ını da güncelle
+        if hasattr(self, 'fatura_musteri_combobox'):
+            musteri_adlari = [m[1] for m in musteriler]
+            self.fatura_musteri_combobox['values'] = musteri_adlari
+            if not self.fatura_musteri_var.get() in musteri_adlari:
+                self.fatura_musteri_var.set("")  # Eğer seçili müşteri yoksa veya kaldırıldıysa temizle
+
+    def musteri_liste_secildi(self, event):
+        """Müşteri Treeview'ında bir satır seçildiğinde giriş alanlarını doldurur."""
+        selected_item = self.musteri_liste.focus()
+        if selected_item:
+            values = self.musteri_liste.item(selected_item, "values")
+            self.selected_customer_id = values[0]
+
+            self.musteri_ad_entry.delete(0, tk.END)
+            self.musteri_ad_entry.insert(0, values[1])
+            self.musteri_adres_entry.delete(0, tk.END)
+            self.musteri_adres_entry.insert(0, values[2])
+            self.musteri_telefon_entry.delete(0, tk.END)
+            self.musteri_telefon_entry.insert(0, values[3])
+            self.musteri_eposta_entry.delete(0, tk.END)
+            self.musteri_eposta_entry.insert(0, values[4])
+        else:
+            self.temizle_musteri()
+
+    # --- Envanter Yönetimi Sekmesi Fonksiyonları ---
     def _envanter_yonetimi_arayuzu_olustur(self, parent_frame):
-        """Envanter yönetimi sekmesinin kullanıcı arayüzünü oluşturur."""
-        urun_giris_frame = ttk.LabelFrame(parent_frame, text="Yeni Ürün Ekle / Düzenle", padding=15)
-        urun_giris_frame.pack(pady=10, padx=0, fill="x", expand=False)
-        urun_giris_frame.grid_columnconfigure(1, weight=1)
+        """Envanter yönetimi sekmesinin arayüzünü oluşturur."""
+        urun_frame = ttk.LabelFrame(parent_frame, text="Ürün / Hizmet Ekle / Düzenle / Sil", padding=15)
+        urun_frame.pack(pady=10, padx=0, fill="x", expand=False)
 
-        # Ürün giriş alanları
-        ttk.Label(urun_giris_frame, text="Ürün Adı:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
-        self.urun_adi_entry = ttk.Entry(urun_giris_frame, width=40)
-        self.urun_adi_entry.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        urun_frame.grid_columnconfigure(1, weight=1)
 
-        ttk.Label(urun_giris_frame, text="Stok Miktarı:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
-        self.stok_miktari_entry = ttk.Entry(urun_giris_frame, width=40)
-        self.stok_miktari_entry.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
+        input_widgets = [
+            ("Ad:", "urun_ad_entry", None, "Entry"),
+            ("Stok Miktarı:", "urun_stok_entry", None, "Entry"),
+            ("Alış Fiyatı (₺):", "urun_alis_fiyat_entry", None, "Entry"),
+            ("Satış Fiyatı (₺):", "urun_satis_fiyat_entry", None, "Entry"),
+            ("KDV Oranı (%):", "urun_kdv_oran_entry", None, "Entry"),
+        ]
 
-        ttk.Label(urun_giris_frame, text="Alış Fiyatı (₺):").grid(row=2, column=0, padx=5, pady=5, sticky="w")
-        self.alis_fiyati_entry = ttk.Entry(urun_giris_frame, width=40)
-        self.alis_fiyati_entry.grid(row=2, column=1, padx=5, pady=5, sticky="ew")
-
-        ttk.Label(urun_giris_frame, text="Satış Fiyatı (₺):").grid(row=3, column=0, padx=5, pady=5, sticky="w")
-        self.satis_fiyati_entry = ttk.Entry(urun_giris_frame, width=40)
-        self.satis_fiyati_entry.grid(row=3, column=1, padx=5, pady=5, sticky="ew")
-
-        ttk.Label(urun_giris_frame, text="KDV Oranı (%):").grid(row=4, column=0, padx=5, pady=5, sticky="w")
-        self.urun_kdv_orani_var = tk.StringVar(value="18")
-        self.urun_kdv_orani_combobox = ttk.Combobox(urun_giris_frame, textvariable=self.urun_kdv_orani_var,
-                                                    values=["0", "1", "8", "10", "18", "20"], state="readonly",
-                                                    width=38)
-        self.urun_kdv_orani_combobox.grid(row=4, column=1, padx=5, pady=5, sticky="ew")
+        for i, (label_text, var_name, values, widget_type) in enumerate(input_widgets):
+            ttk.Label(urun_frame, text=label_text).grid(row=i, column=0, padx=10, pady=5, sticky="w")
+            entry = ttk.Entry(urun_frame, width=40)
+            entry.grid(row=i, column=1, padx=10, pady=5, sticky="ew")
+            setattr(self, var_name, entry)
+            if var_name == "urun_kdv_oran_entry":
+                entry.insert(0, "18.0")  # Varsayılan KDV oranı
 
         # Ürün butonları
-        urun_buton_frame = ttk.Frame(urun_giris_frame, padding="10 0 0 0")
-        urun_buton_frame.grid(row=5, column=0, columnspan=2, pady=10, sticky="ew")
-        ttk.Button(urun_buton_frame, text="Kaydet", command=self.urun_ekle).pack(side="left", padx=5, fill="x",
-                                                                                 expand=True)
-        ttk.Button(urun_buton_frame, text="Güncelle", command=self.urun_guncelle).pack(side="left", padx=5, fill="x",
-                                                                                       expand=True)
-        ttk.Button(urun_buton_frame, text="Sil", command=self.urun_sil).pack(side="left", padx=5, fill="x", expand=True)
+        urun_buton_frame = ttk.Frame(urun_frame, padding="10 0 0 0")
+        urun_buton_frame.grid(row=len(input_widgets), column=0, columnspan=2, pady=10, sticky="ew")
+
+        ttk.Button(urun_buton_frame, text="Ürün Ekle", command=self.urun_ekle).pack(side="left", padx=5, fill="x",
+                                                                                    expand=True)
+        ttk.Button(urun_buton_frame, text="Ürün Güncelle", command=self.urun_guncelle).pack(side="left", padx=5,
+                                                                                            fill="x", expand=True)
+        ttk.Button(urun_buton_frame, text="Ürün Sil", command=self.urun_sil).pack(side="left", padx=5, fill="x",
+                                                                                  expand=True)
         ttk.Button(urun_buton_frame, text="Temizle", command=self.temizle_urun).pack(side="left", padx=5, fill="x",
                                                                                      expand=True)
 
         # Ürün listesi (Treeview)
         urun_liste_frame = ttk.Frame(parent_frame, padding="10 0 0 0")
         urun_liste_frame.pack(pady=10, padx=0, fill="both", expand=True)
-        urun_liste_frame.grid_rowconfigure(0, weight=1)
-        urun_liste_frame.grid_columnconfigure(0, weight=1)
 
         urun_scroll_y = ttk.Scrollbar(urun_liste_frame, orient="vertical")
         urun_scroll_x = ttk.Scrollbar(urun_liste_frame, orient="horizontal")
 
         self.urun_liste = ttk.Treeview(urun_liste_frame,
-                                       columns=("id", "Ürün Adı", "Stok", "Alış Fiyatı", "Satış Fiyatı", "KDV Oranı"),
+                                       columns=("id", "Ad", "Stok", "Alış Fiyatı", "Satış Fiyatı", "KDV Oranı"),
                                        show="headings",
                                        yscrollcommand=urun_scroll_y.set,
                                        xscrollcommand=urun_scroll_x.set)
@@ -699,1761 +1857,560 @@ class GelirGiderUygulamasi:
         urun_scroll_y.config(command=self.urun_liste.yview)
         urun_scroll_x.config(command=self.urun_liste.xview)
 
-        # Ürün sütun başlıkları ve genişlikleri
         urun_columns_info = {
-            "id": {"text": "ID", "width": 40, "minwidth": 30},
-            "Ürün Adı": {"text": "Ürün Adı", "width": 150, "minwidth": 120},
-            "Stok": {"text": "Stok Miktarı", "width": 100, "minwidth": 80, "anchor": "e"},
-            "Alış Fiyatı": {"text": "Alış Fiyatı (₺)", "width": 120, "minwidth": 100, "anchor": "e"},
-            "Satış Fiyatı": {"text": "Satış Fiyatı (₺)", "width": 120, "minwidth": 100, "anchor": "e"},
-            "KDV Oranı": {"text": "KDV (%)", "width": 80, "minwidth": 60, "anchor": "e"}
+            "id": {"text": "ID", "width": 50},
+            "Ad": {"text": "Ad", "width": 150},
+            "Stok": {"text": "Stok", "width": 80},
+            "Alış Fiyatı": {"text": "Alış Fiyatı (₺)", "width": 100},
+            "Satış Fiyatı": {"text": "Satış Fiyatı (₺)", "width": 100},
+            "KDV Oranı": {"text": "KDV Oranı (%)", "width": 90}
         }
 
         for col_name, info in urun_columns_info.items():
-            self.urun_liste.heading(col_name, text=info["text"], anchor=info.get("anchor", "w"))
-            self.urun_liste.column(col_name, width=info["width"], minwidth=info["minwidth"], stretch=tk.NO,
-                                   anchor=info.get("anchor", "w"))
+            self.urun_liste.heading(col_name, text=info["text"], anchor="w")
+            self.urun_liste.column(col_name, width=info["width"], stretch=tk.NO)
 
         self.urun_liste.grid(row=0, column=0, sticky="nsew")
         urun_scroll_y.grid(row=0, column=1, sticky="ns")
         urun_scroll_x.grid(row=1, column=0, sticky="ew")
 
+        urun_liste_frame.grid_rowconfigure(0, weight=1)
+        urun_liste_frame.grid_columnconfigure(0, weight=1)
+
         self.urun_liste.bind("<<TreeviewSelect>>", self.urun_liste_secildi)
 
-    def _vergi_raporlari_arayuzu_olustur(self, parent_frame):
-        """Vergi raporları sekmesinin kullanıcı arayüzünü oluşturur."""
-        vergi_rapor_frame = ttk.LabelFrame(parent_frame, text="Vergi Raporları ve KDV Özetleri", padding=15)
-        vergi_rapor_frame.pack(pady=10, padx=0, fill="both", expand=True)
-        vergi_rapor_frame.grid_columnconfigure(1, weight=1)
-
-        # Tarih filtreleme alanı
-        ttk.Label(vergi_rapor_frame, text="Başlangıç Tarihi:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
-        self.vergi_bas_tarih_entry = DateEntry(vergi_rapor_frame, selectmode='day', date_pattern='yyyy-mm-dd', width=20)
-        self.vergi_bas_tarih_entry.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
-        self.vergi_bas_tarih_entry.set_date(datetime.now().replace(day=1).strftime("%Y-%m-%d"))  # Ayın başına ayarla
-
-        ttk.Label(vergi_rapor_frame, text="Bitiş Tarihi:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
-        self.vergi_bit_tarih_entry = DateEntry(vergi_rapor_frame, selectmode='day', date_pattern='yyyy-mm-dd', width=20)
-        self.vergi_bit_tarih_entry.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
-        self.vergi_bit_tarih_entry.set_date(datetime.now().strftime("%Y-%m-%d"))  # Bugüne ayarla
-
-        ttk.Button(vergi_rapor_frame, text="Raporu Getir", command=self.vergi_raporu_getir).grid(row=2, column=0,
-                                                                                                 columnspan=2, padx=5,
-                                                                                                 pady=10, sticky="ew")
-
-        # KDV Özetleri bölümü
-        kdv_ozet_frame = ttk.LabelFrame(vergi_rapor_frame, text="KDV Özetleri", padding=10)
-        kdv_ozet_frame.grid(row=3, column=0, columnspan=2, padx=5, pady=10, sticky="nsew")
-        kdv_ozet_frame.grid_columnconfigure(1, weight=1)
-
-        ttk.Label(kdv_ozet_frame, text="Toplam Satış KDV'si (Tahsil Edilen):", font=("Arial", 10, "bold")).grid(row=0,
-                                                                                                                column=0,
-                                                                                                                padx=5,
-                                                                                                                pady=2,
-                                                                                                                sticky="w")
-        self.toplam_satis_kdv_label = ttk.Label(kdv_ozet_frame, text="₺0.00", font=("Arial", 10))
-        self.toplam_satis_kdv_label.grid(row=0, column=1, padx=5, pady=2, sticky="e")
-
-        ttk.Label(kdv_ozet_frame, text="Toplam Alış KDV'si (Ödenen):", font=("Arial", 10, "bold")).grid(row=1, column=0,
-                                                                                                        padx=5, pady=2,
-                                                                                                        sticky="w")
-        self.toplam_alis_kdv_label = ttk.Label(kdv_ozet_frame, text="₺0.00",
-                                               font=("Arial", 10))  # Şimdilik manuel, ileride ekleyebiliriz
-        self.toplam_alis_kdv_label.grid(row=1, column=1, padx=5, pady=2, sticky="e")
-
-        ttk.Label(kdv_ozet_frame, text="Ödenecek/İade Edilecek KDV:", font=("Arial", 11, "bold")).grid(row=2, column=0,
-                                                                                                       padx=5, pady=5,
-                                                                                                       sticky="w")
-        self.kdv_farki_label = ttk.Label(kdv_ozet_frame, text="₺0.00", font=("Arial", 11, "bold"))
-        self.kdv_farki_label.grid(row=2, column=1, padx=5, pady=5, sticky="e")
-
-        # KDV Detay Tablosu (Oranlara göre dağılım)
-        kdv_detay_frame = ttk.LabelFrame(vergi_rapor_frame, text="KDV Oranlarına Göre Dağılım", padding=10)
-        kdv_detay_frame.grid(row=4, column=0, columnspan=2, padx=5, pady=10, sticky="nsew")
-        kdv_detay_frame.grid_columnconfigure(0, weight=1)
-        kdv_detay_frame.grid_columnconfigure(1, weight=1)
-
-        self.kdv_detay_liste = ttk.Treeview(kdv_detay_frame, columns=("Oran", "KDV Tutarı"), show="headings")
-        self.kdv_detay_liste.heading("Oran", text="KDV Oranı (%)", anchor="w")
-        self.kdv_detay_liste.column("Oran", width=100, minwidth=80, stretch=tk.NO)
-        self.kdv_detay_liste.heading("KDV Tutarı", text="KDV Tutarı (₺)", anchor="e")
-        self.kdv_detay_liste.column("KDV Tutarı", width=150, minwidth=120, stretch=tk.NO, anchor="e")
-        self.kdv_detay_liste.pack(fill="both", expand=True)
-
-        vergi_rapor_frame.grid_rowconfigure(4, weight=1)
-
-        # --- Ana İşlem Fonksiyonları ---
-
-    def kaydet(self):
-        """Yeni bir gelir/gider işlemi kaydeder."""
-        tur = self.tur_var.get()
-        miktar_str = self.miktar_entry.get()
-        kategori = self.kategori_var.get()
-        aciklama = self.aciklama_entry.get()
-        tarih = self.tarih_entry.get_date().strftime("%Y-%m-%d")
-
-        # Giriş kontrolleri
-        if not tur:
-            messagebox.showerror("Hata", "Lütfen işlem türünü seçiniz.")
-            return
-
-        try:
-            miktar = float(miktar_str.replace(",", "."))  # Virgülü noktaya çevirerek ondalık sayıya dönüştür
-            if miktar <= 0:
-                messagebox.showerror("Hata", "Miktar pozitif bir sayı olmalıdır.")
-                return
-        except ValueError:
-            messagebox.showerror("Hata", "Geçersiz miktar değeri. Lütfen sayı giriniz.")
-            return
-
-        if not kategori or kategori == "Kategori Seçin":  # "Kategori Seçin" varsayılan değeri de kontrol et
-            messagebox.showerror("Hata", "Lütfen bir kategori seçiniz.")
-            return
-
-        if not tarih:
-            messagebox.showerror("Hata", "Lütfen geçerli bir tarih seçiniz.")
-            return
-
-        try:
-            # İşlemi veritabanına ekle
-            self.db_manager.insert_transaction(tur, miktar, kategori, aciklama, tarih, self.kullanici_id)
-
-            messagebox.showinfo("Başarılı", "İşlem başarıyla kaydedildi.")
-
-            # Her işlem kaydedildiğinde AI modelini kullanıcı verileriyle yeniden eğit
-            # Bu işlem büyük veri setlerinde UI'yi dondurabilir, ancak az veri varsa sorun olmaz.
-            # Performans kritikse, ayrı bir thread'de çalıştırmak daha iyi olabilir.
-            self._retrain_ai_model()
-
-            self.temizle()  # Giriş alanlarını temizle
-            self.listele()  # Listeyi güncelle
-        except Exception as e:
-            messagebox.showerror("Hata", f"Veritabanına kaydetme hatası: {e}")
-
-    def guncelle(self):
-        """Mevcut bir gelir/gider işlemini günceller."""
-        if self.selected_item_id is None:
-            messagebox.showwarning("Uyarı", "Lütfen güncellemek istediğiniz kaydı seçiniz.")
-            return
-
-        tur = self.tur_var.get()
-        miktar_str = self.miktar_entry.get()
-        kategori = self.kategori_var.get()
-        aciklama = self.aciklama_entry.get()
-        tarih = self.tarih_entry.get_date().strftime("%Y-%m-%d")
-
-        # Giriş kontrolleri (kaydet fonksiyonu ile benzer)
-        if not tur:
-            messagebox.showerror("Hata", "Lütfen işlem türünü seçiniz.")
-            return
-
-        try:
-            miktar = float(miktar_str.replace(",", "."))
-            if miktar <= 0:
-                messagebox.showerror("Hata", "Miktar pozitif bir sayı olmalıdır.")
-                return
-        except ValueError:
-            messagebox.showerror("Hata", "Geçersiz miktar değeri. Lütfen sayı giriniz.")
-            return
-
-        if not kategori or kategori == "Kategori Seçin":
-            messagebox.showerror("Hata", "Lütfen bir kategori seçiniz.")
-            return
-
-        if not tarih:
-            messagebox.showerror("Hata", "Lütfen geçerli bir tarih seçiniz.")
-            return
-
-        try:
-            # İşlemi veritabanında güncelle
-            self.db_manager.update_transaction(self.selected_item_id, tur, miktar, kategori, aciklama, tarih,
-                                               self.kullanici_id)
-            messagebox.showinfo("Başarılı", "Kayıt başarıyla güncellendi.")
-
-            # Her işlem güncellendiğinde AI modelini yeniden eğit
-            self._retrain_ai_model()
-
-            self.temizle()
-            self.listele()
-        except Exception as e:
-            messagebox.showerror("Hata", f"Veritabanı güncelleme hatası: {e}")
-
-    def listele(self, event=None):
-        """İşlemleri filtreleyerek listeler ve özet bilgileri günceller."""
-        # Mevcut tüm satırları temizle
-        for row in self.liste.get_children():
-            self.liste.delete(row)
-
-        # Filtreleme kriterlerini al
-        tur = self.filtre_tur_var.get()
-        kategori = self.filtre_kategori_var.get()
-
-        bas_tarih = self.bas_tarih_entry.get_date().strftime("%Y-%m-%d") if self.bas_tarih_entry.get() else ""
-        bit_tarih = self.bit_tarih_entry.get_date().strftime("%Y-%m-%d") if self.bit_tarih_entry.get() else ""
-        arama_terimi = self.arama_entry.get().strip()
-
-        try:
-            # Veritabanından filtrelenmiş verileri çek
-            veriler = self.db_manager.get_transactions(self.kullanici_id, tur, kategori, bas_tarih, bit_tarih,
-                                                       arama_terimi)
-        except Exception as e:
-            messagebox.showerror("Veritabanı Hatası", f"Veri çekme hatası: {e}")
-            return
-
-        toplam_gelir = 0.0
-        toplam_gider = 0.0
-
-        # Çekilen verileri Treeview'a ekle ve toplamları hesapla
-        for veri in veriler:
-            self.liste.insert("", tk.END, values=veri)
-
-            if veri[1] == "Gelir":  # veri[1] işlem türünü (Gelir/Gider) tutar
-                toplam_gelir += veri[2]  # veri[2] miktarı tutar
-            else:
-                toplam_gider += veri[2]
-
-        # Özet bilgilerini güncelle
-        self.toplam_gelir_label.config(text=f"Toplam Gelir: ₺{toplam_gelir:,.2f}")
-        self.toplam_gider_label.config(text=f"Toplam Gider: ₺{toplam_gider:,.2f}")
-        bakiye = toplam_gelir - toplam_gider
-        self.bakiye_label.config(text=f"Bakiye: ₺{bakiye:,.2f}",
-                                 foreground="blue" if bakiye >= 0 else "red")  # Bakiyeye göre renk değişimi
-
-    def liste_secildi(self, event):
-        """İşlem listesinden bir öğe seçildiğinde giriş alanlarını doldurur."""
-        selected_items = self.liste.selection()
-        if selected_items:
-            selected_item = selected_items[0]
-            values = self.liste.item(selected_item, "values")
-            self.selected_item_id = values[0]  # Seçili öğenin ID'sini sakla
-
-            # Giriş alanlarını seçilen verilerle doldur
-            self.tur_var.set(values[1])
-            self.miktar_entry.delete(0, tk.END)
-            self.miktar_entry.insert(0, f"{values[2]}".replace(".", ","))  # Virgül formatıyla göster
-            self.kategori_var.set(values[3])
-            self.aciklama_entry.delete(0, tk.END)
-            self.aciklama_entry.insert(0, values[4])
-            try:
-                date_obj = datetime.strptime(values[5], "%Y-%m-%d").date()  # Tarihi DateEntry formatına dönüştür
-                self.tarih_entry.set_date(date_obj)
-            except ValueError:
-                self.tarih_entry.set_date(datetime.now().date())  # Hata durumunda bugünü ayarla
-        else:
-            self.selected_item_id = None  # Seçim yoksa ID'yi sıfırla
-            self.temizle()  # Giriş alanlarını temizle
-
-    def temizle(self):
-        """Ana işlem giriş alanlarını temizler."""
-        self.tur_var.set("Gelir")  # Varsayılan değer
-        self.miktar_entry.delete(0, tk.END)
-        self.kategori_var.set("Kategori Seçin")  # Varsayılan değer
-        self.aciklama_entry.delete(0, tk.END)
-        self.tarih_entry.set_date(datetime.now().date())
-        self.selected_item_id = None  # Seçili ID'yi sıfırla
-
-    def sil(self):
-        """Seçili gelir/gider işlemini siler."""
-        selected_items = self.liste.selection()
-        if not selected_items:
-            messagebox.showwarning("Uyarı", "Lütfen silmek istediğiniz kaydı seçiniz.")
-            return
-
-        selected_item = selected_items[0]
-        values = self.liste.item(selected_item, "values")
-        record_id = values[0]  # Silinecek kaydın ID'si
-
-        onay = messagebox.askyesno("Onay", "Seçili kaydı silmek istediğinize emin misiniz?")
-        if onay:
-            try:
-                self.db_manager.delete_transaction(record_id, self.kullanici_id)
-                messagebox.showinfo("Başarılı", "Kayıt başarıyla silindi.")
-
-                # Her işlem silindiğinde AI modelini yeniden eğit
-                self._retrain_ai_model()
-
-                self.listele()  # Listeyi güncelle
-                self.temizle()  # Giriş alanlarını temizle
-            except Exception as e:
-                messagebox.showerror("Hata", f"Kayıt silme hatası: {e}")
-
-    def grafik_goster(self):
-        """Gelir-gider grafiklerini gösterir."""
-        kategori_verileri, zaman_verileri = self.db_manager.get_transaction_for_charts(self.kullanici_id)
-
-        if not kategori_verileri and not zaman_verileri:
-            messagebox.showinfo("Bilgi", "Gösterilecek veri bulunamadı.")
-            return
-
-        grafik_pencere = tk.Toplevel(self.root)  # Yeni bir pencere oluştur
-        grafik_pencere.title("Gelir-Gider Grafikleri")
-        grafik_pencere.geometry("1000x700")
-
-        # Matplotlib figür ve eksenleri oluştur
-        fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6))  # 1 satır, 3 sütunlu alt grafik
-        fig.tight_layout(pad=4.0)  # Grafikler arası boşluk
-
-        # --- Gelir Dağılım Grafiği (Pasta Grafik) ---
-        gelirler = [v for v in kategori_verileri if v[0] == "Gelir"]  # Sadece gelir verilerini al
-        if gelirler:
-            gelir_miktarlari = [v[2] for v in gelirler]
-            gelir_kategorileri = [f"{v[1]} ({v[2]:,.2f}₺)" for v in gelirler]  # Etiketlere miktar ekle
-            ax1.pie(gelir_miktarlari,
-                    labels=gelir_kategorileri,
-                    autopct='%1.1f%%',  # Yüzdeleri göster
-                    startangle=90,  # Başlangıç açısı
-                    pctdistance=0.85)  # Yüzde etiketlerinin konumu
-            ax1.set_title("Gelir Dağılımı", fontsize=14)
-            ax1.axis('equal')  # Oranların eşit görünmesini sağla (daire şeklinde)
-        else:
-            ax1.text(0.5, 0.5, "Gelir Verisi Yok", horizontalalignment='center', verticalalignment='center',
-                     transform=ax1.transAxes, fontsize=12)
-            ax1.set_title("Gelir Dağılımı", fontsize=14)
-            ax1.axis('off')  # Eksenleri gizle
-
-        # --- Gider Dağılım Grafiği (Pasta Grafik) ---
-        giderler = [v for v in kategori_verileri if v[0] == "Gider"]  # Sadece gider verilerini al
-        if giderler:
-            gider_miktarlari = [v[2] for v in giderler]
-            gider_kategorileri = [f"{v[1]} ({v[2]:,.2f}₺)" for v in giderler]
-            ax2.pie(gider_miktarlari,
-                    labels=gider_kategorileri,
-                    autopct='%1.1f%%',
-                    startangle=90,
-                    pctdistance=0.85)
-            ax2.set_title("Gider Dağılımı", fontsize=14)
-            ax2.axis('equal')
-        else:
-            ax2.text(0.5, 0.5, "Gider Verisi Yok", horizontalalignment='center', verticalalignment='center',
-                     transform=ax2.transAxes, fontsize=12)
-            ax2.set_title("Gider Dağılımı", fontsize=14)
-            ax2.axis('off')
-
-        # --- Zaman İçinde Kümülatif Bakiye Grafiği (Çizgi Grafik) ---
-        if zaman_verileri:
-            tarihler = sorted(list(set([v[0] for v in zaman_verileri])))  # Benzersiz tarihleri sırala
-            gunluk_bakiye = {t: 0.0 for t in tarihler}  # Her gün için başlangıç bakiyesini sıfırla
-
-            # Günlük bakiyeleri hesapla
-            for tarih, tur, miktar in zaman_verileri:
-                if tur == "Gelir":
-                    gunluk_bakiye[tarih] += miktar
-                else:
-                    gunluk_bakiye[tarih] -= miktar
-
-            # Kümülatif bakiyeyi hesapla
-            kumulatif_bakiye = []
-            current_bakiye = 0
-            for tarih in tarihler:
-                current_bakiye += gunluk_bakiye[tarih]
-                kumulatif_bakiye.append(current_bakiye)
-
-            ax3.plot(tarihler, kumulatif_bakiye, marker='o', linestyle='-', color='purple')
-            ax3.set_title("Zaman İçinde Kümülatif Bakiye", fontsize=14)
-            ax3.set_xlabel("Tarih", fontsize=12)
-            ax3.set_ylabel("Bakiye (₺)", fontsize=12)
-            ax3.tick_params(axis='x', rotation=45)  # Tarih etiketlerini döndür
-            ax3.grid(True, linestyle='--', alpha=0.6)  # Izgara ekle
-            num_ticks = min(len(tarihler), 10)  # Maksimum 10 etiket göster (yoğunluğu azaltmak için)
-            ax3.xaxis.set_major_locator(plt.MaxNLocator(num_ticks))
-        else:
-            ax3.text(0.5, 0.5, "Bakiye Verisi Yok", horizontalalignment='center', verticalalignment='center',
-                     transform=ax3.transAxes, fontsize=12)
-            ax3.set_title("Zaman İçinde Kümülatif Bakiye", fontsize=14)
-            ax3.axis('off')
-
-        # Matplotlib grafiğini Tkinter penceresine göm
-        canvas = FigureCanvasTkAgg(fig, master=grafik_pencere)
-        canvas.draw()
-        canvas.get_tk_widget().pack(side="top", fill="both", expand=True)
-
-    # --- Tekrarlayan İşlem Fonksiyonları ---
-
-    def kaydet_tekrar_eden(self):
-        """Yeni bir tekrarlayan işlemi kaydeder."""
-        tur = self.tur_tekrar_var.get()
-        miktar_str = self.miktar_tekrar_entry.get()
-        kategori = self.kategori_tekrar_var.get()
-        aciklama = self.aciklama_tekrar_entry.get()
-        baslangic_tarih_degeri = self.baslangic_tarih_tekrar_entry.get_date().strftime("%Y-%m-%d")
-        siklilik = self.siklilik_var.get()
-
-        if not all([tur, miktar_str, kategori, baslangic_tarih_degeri, siklilik]):
-            messagebox.showerror("Hata", "Lütfen tüm tekrarlayan işlem alanlarını doldurunuz.")
-            return
-
-        try:
-            miktar = float(miktar_str.replace(",", "."))
-            if miktar <= 0:
-                messagebox.showerror("Hata", "Miktar pozitif bir sayı olmalıdır.")
-                return
-        except ValueError:
-            messagebox.showerror("Hata", "Geçersiz miktar değeri. Lütfen sayı giriniz.")
-            return
-
-        if not kategori or kategori == "Kategori Seçin":
-            messagebox.showerror("Hata", "Lütfen bir kategori seçiniz.")
-            return
-
-        if not baslangic_tarih_degeri:
-            messagebox.showerror("Hata", "Lütfen geçerli bir başlangıç tarihi seçiniz.")
-            return
-
-        try:
-            # Tekrarlayan işlemi veritabanına ekle
-            self.db_manager.insert_recurring_transaction(tur, miktar, kategori, aciklama, baslangic_tarih_degeri,
-                                                         siklilik, baslangic_tarih_degeri, self.kullanici_id)
-
-            messagebox.showinfo("Başarılı", "Tekrarlayan işlem başarıyla kaydedildi.")
-            self.temizle_tekrar_eden()
-            self.listele_tekrar_eden_islemler()
-            self.uretim_kontrolu()  # Yeni tekrarlayan işlemleri kontrol et
-        except Exception as e:
-            messagebox.showerror("Hata", f"Tekrarlayan işlem kaydetme hatası: {e}")
-
-    def sil_tekrar_eden(self):
-        """Seçili tekrarlayan işlemi siler."""
-        selected_items = self.tekrar_eden_liste.selection()
-        if not selected_items:
-            messagebox.showwarning("Uyarı", "Lütfen silmek istediğiniz tekrarlayan kaydı seçiniz.")
-            return
-
-        selected_item = selected_items[0]
-        values = self.tekrar_eden_liste.item(selected_item, "values")
-        record_id = values[0]
-
-        onay = messagebox.askyesno("Onay", "Seçili tekrarlayan kaydı silmek istediğinize emin misiniz?")
-        if onay:
-            try:
-                self.db_manager.delete_recurring_transaction(record_id, self.kullanici_id)
-                messagebox.showinfo("Başarılı", "Tekrarlayan kayıt başarıyla silindi.")
-                self.listele_tekrar_eden_islemler()
-                self.temizle_tekrar_eden()
-            except Exception as e:
-                messagebox.showerror("Hata", f"Tekrarlayan kayıt silme hatası: {e}")
-
-    def listele_tekrar_eden_islemler(self):
-        """Tekrarlayan işlemleri listeler."""
-        for row in self.tekrar_eden_liste.get_children():
-            self.tekrar_eden_liste.delete(row)
-
-        try:
-            veriler = self.db_manager.get_recurring_transactions(self.kullanici_id)
-            for veri in veriler:
-                self.tekrar_eden_liste.insert("", tk.END, values=veri)
-        except Exception as e:
-            messagebox.showerror("Veritabanı Hatası", f"Tekrarlayan veri çekme hatası: {e}")
-
-    def tekrar_eden_liste_secildi(self, event):
-        """Tekrarlayan işlem listesinden bir öğe seçildiğinde giriş alanlarını doldurur."""
-        selected_items = self.tekrar_eden_liste.selection()
-        if selected_items:
-            selected_item = selected_items[0]
-            values = self.tekrar_eden_liste.item(selected_item, "values")
-            self.selected_recurring_item_id = values[0]
-
-            self.tur_tekrar_var.set(values[1])
-            self.miktar_tekrar_entry.delete(0, tk.END)
-            self.miktar_tekrar_entry.insert(0, f"{values[2]}".replace(".", ","))
-            self.kategori_tekrar_var.set(values[3])
-            self.aciklama_tekrar_entry.delete(0, tk.END)
-            self.aciklama_tekrar_entry.insert(0, values[4])
-            try:
-                date_obj = datetime.strptime(values[5], "%Y-%m-%d").date()
-                self.baslangic_tarih_tekrar_entry.set_date(date_obj)
-            except ValueError:
-                self.baslangic_tarih_tekrar_entry.set_date(datetime.now().date())
-            self.siklilik_var.set(values[6])
-        else:
-            self.selected_recurring_item_id = None
-            self.temizle_tekrar_eden()
-
-    def temizle_tekrar_eden(self):
-        """Tekrarlayan işlem giriş alanlarını temizler."""
-        self.tur_tekrar_var.set("Gelir")
-        self.miktar_tekrar_entry.delete(0, tk.END)
-        self.kategori_tekrar_var.set("Kategori Seçin")
-        self.aciklama_tekrar_entry.delete(0, tk.END)
-        self.baslangic_tarih_tekrar_entry.set_date(datetime.now().date())
-        self.siklilik_var.set("Aylık")
-        self.selected_recurring_item_id = None
-
-    def uretim_kontrolu(self):
-        """Tekrarlayan işlemleri kontrol eder ve otomatik olarak ana işlemlere ekler."""
-        bugun = datetime.now().date()
-        uretilen_islem_sayisi = 0
-        uretilen_mesajlar = []
-
-        try:
-            tekrar_eden_kayitlar = self.db_manager.get_recurring_transactions(self.kullanici_id)
-
-            for kayit in tekrar_eden_kayitlar:
-                (rec_id, tur, miktar, kategori, aciklama, baslangic_tarih_str, siklilik, son_uretilen_tarih_str) = kayit
-
-                baslangic_tarih = datetime.strptime(baslangic_tarih_str, "%Y-%m-%d").date()
-                son_uretilen_tarih = datetime.strptime(son_uretilen_tarih_str, "%Y-%m-%d").date()
-
-                next_due_date = son_uretilen_tarih  # Son üretilen tarihten devam et
-
-                # Eğer başlangıç tarihi son üretilen tarihten daha yeniyse, başlangıç tarihini kullan
-                if baslangic_tarih > son_uretilen_tarih:
-                    next_due_date = baslangic_tarih
-
-                # Bugün veya öncesi için otomatik işlem üret
-                while next_due_date <= bugun:
-                    if next_due_date > son_uretilen_tarih:  # Daha önce üretilmemişse
-                        try:
-                            self.db_manager.insert_transaction(tur, miktar, kategori, aciklama,
-                                                               next_due_date.strftime("%Y-%m-%d"), self.kullanici_id)
-                            uretilen_islem_sayisi += 1
-                            uretilen_mesajlar.append(
-                                f"{tur} - {miktar:,.2f}₺ ({kategori}) tarihinde: {next_due_date.strftime('%Y-%m-%d')}")
-                        except Exception as e:
-                            print(f"Hata: Tekrarlayan işlem üretilemedi ({rec_id}): {e}")
-                            break  # Hata olursa döngüden çık
-
-                    # Son üretilen tarihi güncelle
-                    self.db_manager.update_recurring_transaction_last_generated_date(rec_id,
-                                                                                     next_due_date.strftime("%Y-%m-%d"))
-
-                    # Bir sonraki işlem tarihini hesapla
-                    if siklilik == "Günlük":
-                        next_due_date += timedelta(days=1)
-                    elif siklilik == "Haftalık":
-                        next_due_date += timedelta(weeks=1)
-                    elif siklilik == "Aylık":
-                        gun = next_due_date.day
-                        ay = next_due_date.month + 1
-                        yil = next_due_date.year
-                        if ay > 12:  # Yıl değişimi
-                            ay = 1
-                            yil += 1
-                        try:
-                            next_due_date = next_due_date.replace(year=yil, month=ay)
-                        except ValueError:
-                            # Ayın son günü gibi durumlarda (örn: 31 Ocak'tan sonra 31 Şubat olmaz)
-                            next_due_date = datetime(yil, ay, 1).date() - timedelta(days=1)
-                    elif siklilik == "Yıllık":
-                        next_due_date = next_due_date.replace(year=next_due_date.year + 1)
-                    else:
-                        break  # Bilinmeyen sıklıkta döngüden çık
-
-        except Exception as e:
-            messagebox.showerror("Veritabanı Hatası", f"Tekrarlayan işlemler kontrol edilirken hata oluştu: {e}")
-
-        if uretilen_islem_sayisi > 0:
-            mesaj = f"Bugün {uretilen_islem_sayisi} adet tekrarlayan işlem otomatik olarak oluşturuldu:\n\n"
-            mesaj += "\n".join(uretilen_mesajlar[:10])  # İlk 10 mesajı göster
-            if uretilen_islem_sayisi > 10:
-                mesaj += "\n..."  # Daha fazlası varsa ... koy
-            messagebox.showinfo("Tekrarlayan İşlem Bildirimi", mesaj)
-            self.listele()  # Ana işlem listesini güncelle
-
-    # --- Kategori Yönetimi Fonksiyonları ---
-    def kategorileri_yukle(self):
-        """Kategorileri veritabanından yükler ve ilgili combobox'ları günceller."""
-        # Kategori listesini temizle
-        for row in self.kategori_liste.get_children():
-            self.kategori_liste.delete(row)
-
-        try:
-            kategoriler = self.db_manager.get_categories_for_user(self.kullanici_id)
-
-            kategori_adlari = ["Kategori Seçin"]  # İşlem combobox'ı için varsayılan seçenek
-            filtre_kategori_adlari = ["Tümü"]  # Filtreleme combobox'ı için varsayılan seçenek
-
-            for kategori in kategoriler:
-                self.kategori_liste.insert("", tk.END, values=kategori)  # Kategori listesine ekle
-                kategori_adlari.append(kategori[1])  # Kategori adını combobox'a ekle
-                filtre_kategori_adlari.append(kategori[1])
-
-            # Combobox'ları yeni kategorilerle güncelle
-            self.kategori_combobox['values'] = kategori_adlari
-            self.kategori_combobox.set("Kategori Seçin")  # Varsayılan olarak "Kategori Seçin"i ayarla
-
-            self.kategori_tekrar_combobox['values'] = kategori_adlari
-            self.kategori_tekrar_combobox.set("Kategori Seçin")
-
-            self.filtre_kategori_combobox['values'] = filtre_kategori_adlari
-            self.filtre_kategori_combobox.set("Tümü")
-
-        except Exception as e:
-            messagebox.showerror("Veritabanı Hatası", f"Kategoriler yüklenirken hata oluştu: {e}")
-
-    def kategori_ekle(self, kategori_adi, kategori_tur="Genel",
-                      show_message=False):  # Varsayılan tür ve mesaj gösterme bayrağı
-        """Yeni bir kategori ekler."""
-        kategori_adi = kategori_adi.strip()  # Boşlukları temizle
-
-        if not kategori_adi:
-            if show_message:
-                messagebox.showerror("Hata", "Kategori adı boş bırakılamaz.")
-            return False
-        # Kategori türü boşsa "Genel" ata
-        if not kategori_tur:
-            kategori_tur = "Genel"
-
-        try:
-            # Kategori zaten varsa hata ver veya işlem yapma
-            if self.db_manager.get_category_by_name(kategori_adi, self.kullanici_id):
-                if show_message:
-                    messagebox.showerror("Hata", "Bu kategori adı zaten mevcut.")
-                return False  # Kategori zaten varsa False döndür
-
-            # Yeni kategoriyi veritabanına ekle
-            self.db_manager.insert_category(kategori_adi, kategori_tur, self.kullanici_id)
-            if show_message:
-                messagebox.showinfo("Başarılı", "Kategori başarıyla eklendi.")
-            self.temizle_kategori()  # Kategori giriş alanlarını temizle
-            self.kategorileri_yukle()  # Kategori listelerini ve combobox'ları güncelle
-            return True  # Başarılıysa True döndür
-        except Exception as e:
-            if show_message:
-                messagebox.showerror("Hata", f"Kategori eklenirken hata oluştu: {e}")
-            return False  # Hata durumunda False döndür
-
-    def kategori_sil(self):
-        """Seçili kategoriyi siler."""
-        selected_items = self.kategori_liste.selection()
-        if not selected_items:
-            messagebox.showwarning("Uyarı", "Lütfen silmek istediğiniz kategoriyi seçiniz.")
-            return
-
-        selected_item = selected_items[0]
-        values = self.kategori_liste.item(selected_item, "values")
-        category_id = values[0]
-        kategori_adi = values[1]
-
-        # Bu kategorinin kaç işlemde kullanıldığını kontrol et
-        islem_sayisi = self.db_manager.count_transactions_by_category(kategori_adi, self.kullanici_id)
-
-        onay_mesaji = ""
-        if islem_sayisi > 0:
-            onay_mesaji = f"'{kategori_adi}' kategorisi {islem_sayisi} adet işlemde kullanılmaktadır. Bu kategoriyi silerseniz, bu işlemlerin kategori bilgisi boş kalacaktır. Emin misiniz?"
-        else:
-            onay_mesaji = f"'{kategori_adi}' kategorisini silmek istediğinize emin misiniz?"
-
-        onay = messagebox.askyesno("Onay", onay_mesaji)
-
-        if onay:
-            try:
-                # Kategorinin kullanıldığı işlemlerde kategori bilgisini NULL yap
-                self.db_manager.update_transactions_category_to_null(kategori_adi, self.kullanici_id)
-                # Kategoriyi veritabanından sil
-                self.db_manager.delete_category(category_id, self.kullanici_id)
-                messagebox.showinfo("Başarılı", "Kategori başarıyla silindi.")
-                self.temizle_kategori()
-                self.kategorileri_yukle()  # Kategori listelerini ve combobox'ları güncelle
-                self.listele()  # Ana işlem listesini güncelle (kategori bilgisi değiştiği için)
-                # Kategori silindiğinde AI modelini yeniden eğit
-                self._retrain_ai_model()
-            except Exception as e:
-                messagebox.showerror("Hata", f"Kategori silinirken hata oluştu: {e}")
-
-    def kategori_liste_secildi(self, event):
-        """Kategori listesinden bir öğe seçildiğinde giriş alanlarını doldurur."""
-        selected_items = self.kategori_liste.selection()
-        if selected_items:
-            selected_item = selected_items[0]
-            values = self.kategori_liste.item(selected_item, "values")
-            self.selected_category_id = values[0]
-
-            self.kategori_adi_entry.delete(0, tk.END)
-            self.kategori_adi_entry.insert(0, values[1])
-            self.kategori_tur_var.set(values[2])
-        else:
-            self.selected_category_id = None
-            self.temizle_kategori()
-
-    def temizle_kategori(self):
-        """Kategori giriş alanlarını temizler."""
-        self.kategori_adi_entry.delete(0, tk.END)
-        self.kategori_tur_var.set("Genel")
-        self.selected_category_id = None
-
-    def _kategori_oner(self):
-        """Açıklama alanındaki metne göre kategori önerisi yapar.
-        Önerilen kategori mevcut kategorilerde yoksa ekleme seçeneği sunar.
-        """
-        description = self.aciklama_entry.get().strip()
-        if not description:
-            messagebox.showwarning("Uyarı", "Kategori önerebilmek için lütfen bir açıklama giriniz.")
-            return
-
-        # Mevcut kategori listesini al
-        current_categories = [cat_name for _, cat_name, _ in self.db_manager.get_categories_for_user(self.kullanici_id)]
-
-        # Yapay zekadan kategori tahmini al
-        suggested_category = self.ai_predictor.predict_category(description)
-
-        if suggested_category:
-            if suggested_category in current_categories:
-                # Önerilen kategori mevcutsa, otomatik olarak seç
-                self.kategori_var.set(suggested_category)
-                messagebox.showinfo("Kategori Önerisi",
-                                    f"Açıklamanıza göre önerilen kategori: '{suggested_category}'. Otomatik olarak seçildi.")
-            else:
-                # Önerilen kategori mevcut değilse, kullanıcıya ekleme seçeneği sun
-                onay = messagebox.askyesno("Yeni Kategori Önerisi",
-                                           f"Açıklamanıza göre '{suggested_category}' adında yeni bir kategori öneriliyor. Bu kategoriyi eklemek ister misiniz?")
-                if onay:
-                    # Yeni kategori ekle (varsayılan tür "Genel" olarak)
-                    eklendi = self.kategori_ekle(suggested_category, "Genel",
-                                                 show_message=False)  # Mesaj göstermeden sessiz ekle
-                    if eklendi:
-                        self.kategori_var.set(suggested_category)  # Eklenen kategoriyi seç
-                        messagebox.showinfo("Kategori Eklendi",
-                                            f"'{suggested_category}' kategorisi başarıyla eklendi ve seçildi.")
-                    else:
-                        messagebox.showerror("Kategori Ekleme Hatası",
-                                             f"'{suggested_category}' kategorisi eklenirken bir sorun oluştu.")
-                else:
-                    messagebox.showinfo("Bilgi", "Yeni kategori ekleme işlemi iptal edildi.")
-        else:
-            messagebox.showinfo("Kategori Önerisi",
-                                "Kategori önerisi yapılamadı. Lütfen manuel olarak seçiniz veya daha fazla veriyle modeli eğitin.")
-
-    def _retrain_ai_model(self):
-        """Yapay zeka modelini kullanıcının mevcut verileriyle yeniden eğitir."""
-        # Veritabanından kullanıcının tüm işlem açıklamalarını ve kategorilerini çek
-        user_data = self.db_manager.get_all_transaction_descriptions_and_categories(self.kullanici_id)
-
-        # Sadece geçerli açıklama ve kategoriye sahip verileri filtrele
-        descriptions = [item[0] for item in user_data if item[0] and item[1]]
-        categories = [item[1] for item in user_data if item[0] and item[1]]
-
-        # Yeterli veri olup olmadığını kontrol et (eşik değeri 10)
-        if len(descriptions) < 10:
-            messagebox.showwarning("Yapay Zeka Eğitimi",
-                                   "Yapay zeka modelini yeniden eğitmek için yeterli sayıda işlem (en az 10 adet) bulunmamaktadır. Model sentetik verilerle desteklenecektir.")
-            # Yeterli veri yoksa, AIPredictor'ın kendi sentetik verilerini kullanmasını sağlayacak şekilde tetikle
-            self.ai_predictor._load_or_retrain_model_with_user_data()
-        else:
-            messagebox.showinfo("Yapay Zeka Eğitimi",
-                                "Yapay zeka modeli kullanıcı verileriyle yeniden eğitiliyor. Bu işlem biraz zaman alabilir...")
-            self.ai_predictor.retrain_model(descriptions, categories)
-            messagebox.showinfo("Yapay Zeka Eğitimi", "Yapay zeka modeli başarıyla yeniden eğitildi!")
-            self.kategorileri_yukle()  # Yeniden eğitimde yeni kategoriler de oluştuysa combobox'ı güncelle
-
-    # --- Raporlama Fonksiyonları ---
-    def rapor_olustur(self):
-        """Kullanıcının seçtiği formatta rapor oluşturur."""
-        # Filtreleme kriterlerini al
-        tur = self.filtre_tur_var.get()
-        kategori = self.filtre_kategori_var.get()
-        bas_tarih = self.bas_tarih_entry.get_date().strftime("%Y-%m-%d") if self.bas_tarih_entry.get() else ""
-        bit_tarih = self.bit_tarih_entry.get_date().strftime("%Y-%m-%d") if self.bit_tarih_entry.get() else ""
-        arama_terimi = self.arama_entry.get().strip()
-
-        try:
-            # Raporlanacak verileri veritabanından çek
-            rapor_verileri = self.db_manager.get_transactions(self.kullanici_id, tur, kategori, bas_tarih, bit_tarih,
-                                                              arama_terimi)
-        except Exception as e:
-            messagebox.showerror("Veritabanı Hatası", f"Rapor verileri çekilirken hata oluştu: {e}")
-            return
-
-        if not rapor_verileri:
-            messagebox.showinfo("Bilgi", "Seçilen kriterlere göre rapor oluşturulacak veri bulunamadı.")
-            return
-
-        # Rapor formatı seçim penceresi oluştur
-        rapor_secenekleri_pencere = tk.Toplevel(self.root)
-        rapor_secenekleri_pencere.title("Rapor Kaydet")
-        rapor_secenekleri_pencere.geometry("300x150")
-        rapor_secenekleri_pencere.transient(self.root)  # Ana pencereye bağlı kal
-        rapor_secenekleri_pencere.grab_set()  # Pencere odaklanmış kalır
-
-        ttk.Label(rapor_secenekleri_pencere, text="Raporu hangi formatta kaydetmek istersiniz?").pack(pady=10)
-
-        # Filtre bilgilerini rapor başlığına eklemek için hazırla
-        filter_info = {
-            "tur": tur,
-            "kategori": kategori,
-            "bas_tarih": bas_tarih,
-            "bit_tarih": bit_tarih,
-            "arama_terimi": arama_terimi
-        }
-
-        # Excel ve PDF rapor butonları
-        ttk.Button(rapor_secenekleri_pencere, text="Excel Olarak Kaydet",
-                   command=lambda: self._excel_rapor_olustur(rapor_verileri, filter_info,
-                                                             rapor_secenekleri_pencere)).pack(pady=5)
-
-        ttk.Button(rapor_secenekleri_pencere, text="PDF Olarak Kaydet",
-                   command=lambda: self._pdf_rapor_olustur(rapor_verileri, filter_info,
-                                                           rapor_secenekleri_pencere)).pack(pady=5)
-
-    def _excel_rapor_olustur(self, data, filter_info, parent_window):
-        """Excel raporunu oluşturur ve kaydeder."""
-        parent_window.destroy()  # Seçim penceresini kapat
-
-        if not data:
-            messagebox.showwarning("Uyarı", "Excel raporu oluşturulacak veri bulunamadı.")
-            return
-
-        # Dosya kaydetme diyaloğu
-        file_path = filedialog.asksaveasfilename(
-            defaultextension=".xlsx",
-            filetypes=[("Excel Dosyaları", "*.xlsx")],
-            title="Excel Raporu Kaydet"
-        )
-        if not file_path:  # Kullanıcı iptal ettiyse
-            return
-
-        try:
-            self.pdf_generator.generate_excel_report(data, file_path)  # PDFGenerator'daki metodu kullan
-            messagebox.showinfo("Başarılı", f"Excel raporu başarıyla kaydedildi:\n{file_path}")
-        except Exception as e:
-            messagebox.showerror("Hata", f"Excel raporu oluşturulurken hata oluştu: {e}")
-
-    def _pdf_rapor_olustur(self, data, filter_info, parent_window):
-        """PDF raporunu oluşturur ve kaydeder."""
-        parent_window.destroy()  # Seçim penceresini kapat
-
-        if not data:
-            messagebox.showwarning("Uyarı", "PDF raporu oluşturulacak veri bulunamadı.")
-            return
-
-        # Dosya kaydetme diyaloğu
-        file_path = filedialog.asksaveasfilename(
-            defaultextension=".pdf",
-            filetypes=[("PDF Dosyaları", "*.pdf")],
-            title="PDF Raporu Kaydet"
-        )
-        if not file_path:  # Kullanıcı iptal ettiyse
-            return
-
-        try:
-            self.pdf_generator.generate_pdf_report(data, file_path, self.username,
-                                                   filter_info)  # PDFGenerator'daki metodu kullan
-            messagebox.showinfo("Başarılı", f"PDF raporu başarıyla kaydedildi:\n{file_path}")
-        except Exception as e:
-            messagebox.showerror("Hata",
-                                 f"PDF raporu oluşturulurken hata oluştu: {e}\nPDF kütüphanesi Türkçe karakter desteği için ek font ayarları gerektirebilir.")
-
-    # --- Fatura/Teklif Fonksiyonları ---
-
-    def belge_numarasi_olustur(self):
-        """Fatura veya teklif için otomatik belge numarası oluşturur."""
-        tur = self.fatura_tur_var.get()
-        current_year = datetime.now().year
-
-        # Kullanıcının en son kullandığı fatura/teklif numaralarını al
-        last_nums = self.db_manager.get_user_invoice_offer_nums(self.kullanici_id)
-        last_invoice_num = last_nums[0] if last_nums else 0
-        last_offer_num = last_nums[1] if last_nums else 0
-
-        belge_no = ""
-        if tur == "Fatura":
-            new_num = last_invoice_num + 1
-            belge_no = f"FTR-{current_year}-{new_num:05d}"  # Örn: FTR-2023-00001
-            self.db_manager.update_user_invoice_offer_num(self.kullanici_id, invoice_num=new_num)
-        elif tur == "Teklif":
-            new_num = last_offer_num + 1
-            belge_no = f"TKLF-{current_year}-{new_num:05d}"  # Örn: TKLF-2023-00001
-            self.db_manager.update_user_invoice_offer_num(self.kullanici_id, offer_num=new_num)
-
-        # Belge numarası giriş alanını güncelle
-        self.belge_numarasi_entry.config(state="normal")  # Yazılabilir hale getir
-        self.belge_numarasi_entry.delete(0, tk.END)
-        self.belge_numarasi_entry.insert(0, belge_no)
-        self.belge_numarasi_entry.config(state="readonly")  # Tekrar sadece okunabilir yap
-
-    def _fatura_tur_secildi(self, event):
-        """Fatura/Teklif türü seçildiğinde ilgili alanları günceller."""
-        selected_type = self.fatura_tur_var.get()
-        if selected_type == "Fatura":
-            self.fatura_durum_var.set("Taslak")  # Fatura varsayılan durum
-        elif selected_type == "Teklif":
-            self.fatura_durum_var.set("Taslak")  # Teklif varsayılan durum
-
-        # Belge numarası alanını temizle ve okunabilir yap
-        self.belge_numarasi_entry.config(state="normal")
-        self.belge_numarasi_entry.delete(0, tk.END)
-        self.belge_numarasi_entry.config(state="readonly")
-
-    def _fatura_tutari_hesapla(self, event=None):
-        """Fatura/teklif kalemlerindeki tutarları ve KDV'yi hesaplar."""
-        items_text = self.fatura_urun_hizmetler_text.get("1.0", tk.END).strip()
-        total_kdv_haric = 0.0
-        total_kdv = 0.0
-
-        if items_text:
-            for line in items_text.split('\n'):
-                parts = [p.strip() for p in line.split(',') if p.strip()]
-                # Beklenen format: Ad,Miktar,Fiyat,KDV%
-                if len(parts) == 4:
-                    try:
-                        quantity = float(parts[1].replace(",", "."))
-                        price = float(parts[2].replace(",", "."))
-                        kdv_orani = float(parts[3].replace(",", "."))
-
-                        item_subtotal = quantity * price
-                        item_kdv_amount = item_subtotal * (kdv_orani / 100.0)
-
-                        total_kdv_haric += item_subtotal
-                        total_kdv += item_kdv_amount
-                    except ValueError:
-                        pass  # Geçersiz satırları atla
-                elif len(parts) == 3:  # Eski format desteği: Ad,Miktar,Fiyat (KDV'siz)
-                    try:
-                        quantity = float(parts[1].replace(",", "."))
-                        price = float(parts[2].replace(",", "."))
-                        item_subtotal = quantity * price
-                        total_kdv_haric += item_subtotal
-                    except ValueError:
-                        pass
-
-        genel_toplam = total_kdv_haric + total_kdv
-
-        # Hesaplanan değerleri giriş alanlarına yaz ve salt okunur yap
-        self.fatura_kdv_haric_toplam_entry.config(state="normal")
-        self.fatura_toplam_kdv_entry.config(state="normal")
-        self.fatura_genel_toplam_entry.config(state="normal")
-
-        self.fatura_kdv_haric_toplam_entry.delete(0, tk.END)
-        self.fatura_kdv_haric_toplam_entry.insert(0, f"{total_kdv_haric:,.2f}".replace(".", ","))
-
-        self.fatura_toplam_kdv_entry.delete(0, tk.END)
-        self.fatura_toplam_kdv_entry.insert(0, f"{total_kdv:,.2f}".replace(".", ","))
-
-        self.fatura_genel_toplam_entry.delete(0, tk.END)
-        self.fatura_genel_toplam_entry.insert(0, f"{genel_toplam:,.2f}".replace(".", ","))
-
-        self.fatura_kdv_haric_toplam_entry.config(state="readonly")
-        self.fatura_toplam_kdv_entry.config(state="readonly")
-        self.fatura_genel_toplam_entry.config(state="readonly")
-
-    def fatura_urun_ekle_envanterden(self):
-        """Envanterden seçilen ürünü fatura/teklif kalemlerine ekler."""
-        selected_product_name = self.fatura_urun_sec_var.get()
-        if not selected_product_name:
-            messagebox.showwarning("Uyarı", "Lütfen envanterden bir ürün seçiniz.")
-            return
-
-        # Ürün verilerini veritabanından çek
-        product_data = self.db_manager.get_product_by_name(selected_product_name, self.kullanici_id)
-
-        if not product_data:
-            messagebox.showerror("Hata", "Seçilen ürün envanterde bulunamadı.")
-            return
-
-        # product_data: (id, urun_adi, stok_miktari, alis_fiyati, satis_fiyati, kdv_orani)
-        # Sadece satış fiyatı ve KDV oranı lazım
-        _, urun_adi_db, _, _, satis_fiyati_db, kdv_orani_db = product_data
-
-        current_text = self.fatura_urun_hizmetler_text.get("1.0", tk.END).strip()
-        # Ürünü 'Ad,Miktar,Fiyat,KDV%' formatında ekle
-        new_line = f"{urun_adi_db},1,{satis_fiyati_db:g},{kdv_orani_db:g}"
-
-        if current_text:
-            self.fatura_urun_hizmetler_text.insert(tk.END, "\n" + new_line)
-        else:
-            self.fatura_urun_hizmetler_text.insert(tk.END, new_line)
-
-        self._fatura_tutari_hesapla()  # Toplamları yeniden hesapla
-
-    def fatura_kaydet(self):
-        """Yeni bir fatura/teklif kaydeder ve fatura ise envanter stoklarını günceller."""
-        tur = self.fatura_tur_var.get()
-        belge_numarasi = self.belge_numarasi_entry.get().strip()
-        musteri_adi = self.fatura_musteri_var.get().strip()
-        belge_tarihi = self.fatura_belge_tarih_entry.get_date().strftime("%Y-%m-%d")
-        son_odeme_gecerlilik_tarihi = self.fatura_son_odeme_gecerlilik_tarih_entry.get_date().strftime("%Y-%m-%d")
-        urun_hizmetler_text = self.fatura_urun_hizmetler_text.get("1.0", tk.END).strip()
-        toplam_tutar_str = self.fatura_kdv_haric_toplam_entry.get().replace(".", "").replace(",", ".").replace("₺",
-                                                                                                               "").strip()
-        toplam_kdv_str = self.fatura_toplam_kdv_entry.get().replace(".", "").replace(",", ".").replace("₺", "").strip()
-        notlar = self.fatura_notlar_text.get("1.0", tk.END).strip()
-        durum = self.fatura_durum_var.get()
-
-        if not all([tur, belge_numarasi, musteri_adi, belge_tarihi, son_odeme_gecerlilik_tarihi, urun_hizmetler_text,
-                    toplam_tutar_str, durum]):
-            messagebox.showerror("Hata", "Lütfen fatura/teklif için tüm gerekli alanları doldurun.")
-            return
-
-        try:
-            toplam_tutar = float(toplam_tutar_str)
-            toplam_kdv = float(toplam_kdv_str)
-            if toplam_tutar < 0 or toplam_kdv < 0:
-                messagebox.showerror("Hata", "Toplam tutarlar negatif olamaz.")
-                return
-        except ValueError:
-            messagebox.showerror("Hata", "Geçersiz toplam tutar değeri. Lütfen sayı giriniz.")
-            return
-
-        # Belge numarasının benzersizliğini kontrol et
-        if self.db_manager.check_belge_numarasi_exists(belge_numarasi, self.kullanici_id):
-            messagebox.showerror("Hata",
-                                 f"'{belge_numarasi}' belge numarası zaten mevcut. Lütfen yeni bir numara oluşturun veya farklı bir numara girin.")
-            return
-
-        urun_hizmetler_list = []
-        for line in urun_hizmetler_text.split('\n'):
-            parts = [p.strip() for p in line.split(',') if p.strip()]
-            if len(parts) == 4:  # Ad, Miktar, Fiyat, KDV% formatı
-                try:
-                    quantity = float(parts[1].replace(",", "."))
-                    price = float(parts[2].replace(",", "."))
-                    kdv_orani = float(parts[3].replace(",", "."))
-                    item_subtotal = quantity * price
-                    item_kdv_amount = item_subtotal * (kdv_orani / 100.0)
-                    urun_hizmetler_list.append({
-                        "ad": parts[0],
-                        "miktar": quantity,
-                        "birim_fiyat": price,
-                        "kdv_orani": kdv_orani,
-                        "kdv_miktari": item_kdv_amount,
-                        "ara_toplam": item_subtotal
-                    })
-                except ValueError:
-                    messagebox.showwarning("Uyarı",
-                                           f"Geçersiz ürün/hizmet satırı atlandı: {line}. Format 'Ad,Miktar,Fiyat,KDV%' olmalı.")
-                    continue
-            elif len(parts) == 3:  # Eski format desteği (KDV'siz)
-                try:
-                    quantity = float(parts[1].replace(",", "."))
-                    price = float(parts[2].replace(",", "."))
-                    item_subtotal = quantity * price
-                    urun_hizmetler_list.append({
-                        "ad": parts[0],
-                        "miktar": quantity,
-                        "birim_fiyat": price,
-                        "kdv_orani": 0.0,
-                        "kdv_miktari": 0.0,
-                        "ara_toplam": item_subtotal
-                    })
-                except ValueError:
-                    messagebox.showwarning("Uyarı",
-                                           f"Geçersiz ürün/hizmet satırı atlandı: {line}. Format 'Ad,Miktar,Fiyat' olmalı.")
-                    continue
-
-        if not urun_hizmetler_list:
-            messagebox.showerror("Hata", "Lütfen geçerli ürün/hizmet bilgileri giriniz (Ad,Miktar,Fiyat,KDV%).")
-            return
-
-        urun_hizmetler_json = json.dumps(urun_hizmetler_list, ensure_ascii=False)  # JSON formatına çevir
-
-        try:
-            # Fatura/teklifi veritabanına ekle
-            self.db_manager.insert_invoice_offer(tur, belge_numarasi, musteri_adi, belge_tarihi,
-                                                 son_odeme_gecerlilik_tarihi, urun_hizmetler_json, toplam_tutar,
-                                                 toplam_kdv, notlar, durum, self.kullanici_id)
-
-            # Eğer kaydedilen bir fatura ise, envanterden stok düşümü yap
-            if tur == "Fatura":
-                for item in urun_hizmetler_list:
-                    product_data = self.db_manager.get_product_by_name(item['ad'], self.kullanici_id)
-                    if product_data:
-                        product_id, _, current_stock, _, _, _ = product_data  # id, urun_adi, stok_miktari, alis_fiyati, satis_fiyati, kdv_orani
-                        new_stock = current_stock - item['miktar']
-                        if new_stock < 0:
-                            messagebox.showwarning("Stok Uyarısı",
-                                                   f"'{item['ad']}' ürünü için stok miktarı eksiye düştü! Yeni stok: {new_stock}")
-                        self.db_manager.update_product_stock(product_id, new_stock)
-
-            messagebox.showinfo("Başarılı", f"{tur} başarıyla kaydedildi.")
-            self.fatura_temizle()  # Fatura/Teklif alanlarını temizle
-            self.listele_fatura_teklifler()  # Fatura/Teklif listesini güncelle
-            self.listele_urunler()  # Ürünler listesini güncelle (stok değişimi için)
-        except Exception as e:
-            messagebox.showerror("Hata", f"{tur} kaydetme hatası: {e}")
-
-    def fatura_guncelle(self):
-        """Mevcut bir fatura/teklifi günceller ve envanter stoklarını ayarlar."""
-        if self.selected_invoice_id is None:
-            messagebox.showwarning("Uyarı", "Lütfen güncellemek istediğiniz fatura/teklifi seçiniz.")
-            return
-
-        # Eski fatura/teklif verilerini çek (stok düzeltmesi için)
-        old_invoice_data = self.db_manager.get_invoice_offer_by_id(self.selected_invoice_id, self.kullanici_id)
-        # old_invoice_data artık 12 elemanlı bir tuple: (id, tur, belge_numarasi, musteri_adi, belge_tarihi, son_odeme_gecerlilik_tarihi, urun_hizmetler_json, toplam_tutar, toplam_kdv, notlar, durum, kullanici_id)
-        old_tur = old_invoice_data[1]  # Eski belge türü
-        old_urun_hizmetler_list = json.loads(old_invoice_data[6]) if old_invoice_data[
-            6] else []  # Eski ürün/hizmet listesi
-
-        # Güncel form verilerini al
-        tur = self.fatura_tur_var.get()
-        belge_numarasi = self.belge_numarasi_entry.get().strip()
-        musteri_adi = self.fatura_musteri_var.get().strip()
-        belge_tarihi = self.fatura_belge_tarih_entry.get_date().strftime("%Y-%m-%d")
-        son_odeme_gecerlilik_tarihi = self.fatura_son_odeme_gecerlilik_tarih_entry.get_date().strftime("%Y-%m-%d")
-        urun_hizmetler_text = self.fatura_urun_hizmetler_text.get("1.0", tk.END).strip()
-        toplam_tutar_str = self.fatura_kdv_haric_toplam_entry.get().replace(".", "").replace(",", ".").replace("₺",
-                                                                                                               "").strip()
-        toplam_kdv_str = self.fatura_toplam_kdv_entry.get().replace(".", "").replace(",", ".").replace("₺", "").strip()
-        notlar = self.fatura_notlar_text.get("1.0", tk.END).strip()
-        durum = self.fatura_durum_var.get()
-
-        if not all([tur, belge_numarasi, musteri_adi, belge_tarihi, son_odeme_gecerlilik_tarihi, urun_hizmetler_text,
-                    toplam_tutar_str, durum]):
-            messagebox.showerror("Hata", "Lütfen fatura/teklif için tüm gerekli alanları doldurun.")
-            return
-
-        try:
-            toplam_tutar = float(toplam_tutar_str)
-            toplam_kdv = float(toplam_kdv_str)
-            if toplam_tutar < 0 or toplam_kdv < 0:
-                messagebox.showerror("Hata", "Toplam tutarlar negatif olamaz.")
-                return
-        except ValueError:
-            messagebox.showerror("Hata", "Geçersiz toplam tutar değeri. Lütfen sayı giriniz.")
-            return
-
-        urun_hizmetler_list = []
-        for line in urun_hizmetler_text.split('\n'):
-            parts = [p.strip() for p in line.split(',') if p.strip()]
-            if len(parts) == 4:  # Ad, Miktar, Fiyat, KDV% formatı
-                try:
-                    quantity = float(parts[1].replace(",", "."))
-                    price = float(parts[2].replace(",", "."))
-                    kdv_orani = float(parts[3].replace(",", "."))
-                    item_subtotal = quantity * price
-                    item_kdv_amount = item_subtotal * (kdv_orani / 100.0)
-                    urun_hizmetler_list.append({
-                        "ad": parts[0],
-                        "miktar": quantity,
-                        "birim_fiyat": price,
-                        "kdv_orani": kdv_orani,
-                        "kdv_miktari": item_kdv_amount,
-                        "ara_toplam": item_subtotal
-                    })
-                except ValueError:
-                    messagebox.showwarning("Uyarı",
-                                           f"Geçersiz ürün/hizmet satırı atlandı: {line}. Format 'Ad,Miktar,Fiyat,KDV%' olmalı.")
-                    continue
-            elif len(parts) == 3:  # Eski formatı da destekle (KDV'siz)
-                try:
-                    quantity = float(parts[1].replace(",", "."))
-                    price = float(parts[2].replace(",", "."))
-                    item_subtotal = quantity * price
-                    urun_hizmetler_list.append({
-                        "ad": parts[0],
-                        "miktar": quantity,
-                        "birim_fiyat": price,
-                        "kdv_orani": 0.0,
-                        "kdv_miktari": 0.0,
-                        "ara_toplam": item_subtotal
-                    })
-                except ValueError:
-                    messagebox.showwarning("Uyarı",
-                                           f"Geçersiz ürün/hizmet satırı atlandı: {line}. Format 'Ad,Miktar,Fiyat' olmalı.")
-                    continue
-
-        if not urun_hizmetler_list:
-            messagebox.showerror("Hata", "Lütfen geçerli ürün/hizmet bilgileri giriniz (Ad,Miktar,Fiyat,KDV%).")
-            return
-
-        urun_hizmetler_json = json.dumps(urun_hizmetler_list, ensure_ascii=False)
-
-        try:
-            # Fatura/teklifi veritabanında güncelle
-            self.db_manager.update_invoice_offer(self.selected_invoice_id, tur, belge_numarasi, musteri_adi,
-                                                 belge_tarihi, son_odeme_gecerlilik_tarihi, urun_hizmetler_json,
-                                                 toplam_tutar, toplam_kdv, notlar, durum, self.kullanici_id)
-
-            # --- Stok Güncelleme Mantığı ---
-            # Eğer eski belge fatura idiyse, eski ürün miktarlarını stoğa geri ekle
-            if old_tur == "Fatura":
-                for item in old_urun_hizmetler_list:
-                    product_data = self.db_manager.get_product_by_name(item['ad'], self.kullanici_id)
-                    if product_data:
-                        product_id, _, current_stock, _, _, _ = product_data
-                        self.db_manager.update_product_stock(product_id, current_stock + item['miktar'])
-
-            # Eğer yeni belge fatura ise, yeni ürün miktarlarını stoktan düş
-            if tur == "Fatura":
-                for item in urun_hizmetler_list:
-                    product_data = self.db_manager.get_product_by_name(item['ad'], self.kullanici_id)
-                    if product_data:
-                        product_id, _, current_stock, _, _, _ = product_data
-                        new_stock = current_stock - item['miktar']
-                        if new_stock < 0:
-                            messagebox.showwarning("Stok Uyarısı",
-                                                   f"'{item['ad']}' ürünü için stok miktarı eksiye düştü! Yeni stok: {new_stock}")
-                        self.db_manager.update_product_stock(product_id, new_stock)
-
-            messagebox.showinfo("Başarılı", f"{tur} başarıyla güncellendi.")
-            self.fatura_temizle()
-            self.listele_fatura_teklifler()
-            self.listele_urunler()
-        except Exception as e:
-            messagebox.showerror("Hata", f"{tur} güncelleme hatası: {e}")
-
-    def fatura_sil(self):
-        """Seçili fatura/teklifi siler ve fatura ise envanter stoklarını geri yükler."""
-        if self.selected_invoice_id is None:
-            messagebox.showwarning("Uyarı", "Lütfen silmek istediğiniz fatura/teklifi seçiniz.")
-            return
-
-        # Silinecek faturanın/teklifin bilgilerini al
-        invoice_to_delete_data = self.db_manager.get_invoice_offer_by_id(self.selected_invoice_id, self.kullanici_id)
-
-        if not invoice_to_delete_data:
-            messagebox.showerror("Hata", "Silinecek fatura/teklif bulunamadı.")
-            return
-
-        tur_to_delete = invoice_to_delete_data[1]  # Tür bilgisi
-        urun_hizmetler_json_to_delete = invoice_to_delete_data[6]  # Ürün/hizmetler JSON bilgisi
-        urun_hizmetler_list_to_delete = json.loads(
-            urun_hizmetler_json_to_delete) if urun_hizmetler_json_to_delete else []
-
-        onay = messagebox.askyesno("Onay", "Seçili fatura/teklifi silmek istediğinize emin misiniz?")
-        if onay:
-            try:
-                self.db_manager.delete_invoice_offer(self.selected_invoice_id, self.kullanici_id)
-
-                # Eğer silinen bir fatura ise, ürün miktarlarını envantere geri ekle
-                if tur_to_delete == "Fatura":
-                    for item in urun_hizmetler_list_to_delete:
-                        product_data = self.db_manager.get_product_by_name(item['ad'], self.kullanici_id)
-                        if product_data:
-                            product_id, _, current_stock, _, _, _ = product_data
-                            self.db_manager.update_product_stock(product_id, current_stock + item['miktar'])
-
-                messagebox.showinfo("Başarılı", "Fatura/Teklif başarıyla silindi.")
-                self.fatura_temizle()
-                self.listele_fatura_teklifler()
-                self.listele_urunler()
-            except Exception as e:
-                messagebox.showerror("Hata", f"Fatura/Teklif silme hatası: {e}")
-
-    def fatura_temizle(self):
-        """Fatura/teklif giriş alanlarını temizler."""
-        self.fatura_tur_var.set("Fatura")
-        self.belge_numarasi_entry.config(state="normal")
-        self.belge_numarasi_entry.delete(0, tk.END)
-        self.belge_numarasi_entry.config(state="readonly")
-        self.fatura_musteri_var.set("")
-        self.fatura_belge_tarih_entry.set_date(datetime.now().strftime("%Y-%m-%d"))
-        self.fatura_son_odeme_gecerlilik_tarih_entry.set_date(datetime.now().strftime("%Y-%m-%d"))
-        self.fatura_urun_hizmetler_text.delete("1.0", tk.END)  # Text widget'ı temizle
-
-        # Salt okunur toplam alanlarını normal hale getirip temizle ve tekrar salt okunur yap
-        self.fatura_kdv_haric_toplam_entry.config(state="normal")
-        self.fatura_kdv_haric_toplam_entry.delete(0, tk.END)
-        self.fatura_kdv_haric_toplam_entry.config(state="readonly")
-        self.fatura_toplam_kdv_entry.config(state="normal")
-        self.fatura_toplam_kdv_entry.delete(0, tk.END)
-        self.fatura_toplam_kdv_entry.config(state="readonly")
-        self.fatura_genel_toplam_entry.config(state="normal")
-        self.fatura_genel_toplam_entry.delete(0, tk.END)
-        self.fatura_genel_toplam_entry.config(state="readonly")
-
-        self.fatura_notlar_text.delete("1.0", tk.END)
-        self.fatura_durum_var.set("Taslak")
-        self.selected_invoice_id = None  # Seçili ID'yi sıfırla
-        self.fatura_urun_sec_var.set("")  # Ürün seçimini temizle
-
-    def listele_fatura_teklifler(self):
-        """Fatura/teklifleri listeler."""
-        for row in self.fatura_liste.get_children():
-            self.fatura_liste.delete(row)
-
-        try:
-            veriler = self.db_manager.get_invoice_offers(self.kullanici_id)
-            for veri in veriler:
-                formatted_veri = list(veri)
-                # Miktar ve KDV değerlerini formatla
-                formatted_veri[4] = f"{veri[4]:,.2f} ₺".replace(".", ",")
-                formatted_veri[5] = f"{veri[5]:,.2f} ₺".replace(".", ",")
-                formatted_veri[6] = f"{veri[6]:,.2f} ₺".replace(".", ",")
-                self.fatura_liste.insert("", tk.END, values=formatted_veri)
-        except Exception as e:
-            messagebox.showerror("Veritabanı Hatası", f"Fatura/Teklif verileri çekilirken hata oluştu: {e}")
-
-    def fatura_liste_secildi(self, event):
-        """Fatura/teklif listesinden bir öğe seçildiğinde giriş alanlarını doldurur."""
-        selected_items = self.fatura_liste.selection()
-        if selected_items:
-            selected_item = selected_items[0]
-            values = self.fatura_liste.item(selected_item, "values")
-            self.selected_invoice_id = values[0]  # Seçili fatura ID'si
-
-            fatura_data = self.db_manager.get_invoice_offer_by_id(self.selected_invoice_id, self.kullanici_id)
-
-            if fatura_data:
-                # database_manager'daki get_invoice_offer_by_id metodundan dönen 12 değeri al
-                (id, tur, belge_numarasi, musteri_adi, belge_tarihi_str, son_odeme_gecerlilik_tarihi_str,
-                 urun_hizmetler_json, toplam_tutar, toplam_kdv, notlar, durum, kullanici_id) = fatura_data
-
-                self.fatura_tur_var.set(tur)
-
-                # Belge numarası alanını güncelle ve salt okunur yap
-                self.belge_numarasi_entry.config(state="normal")
-                self.belge_numarasi_entry.delete(0, tk.END)
-                self.belge_numarasi_entry.insert(0, belge_numarasi)
-                self.belge_numarasi_entry.config(state="readonly")
-
-                self.fatura_musteri_var.set(musteri_adi)  # Müşteri adını ayarla
-
-                try:
-                    # Tarihleri DateEntry formatına dönüştür
-                    self.fatura_belge_tarih_entry.set_date(datetime.strptime(belge_tarihi_str, "%Y-%m-%d").date())
-                    self.fatura_son_odeme_gecerlilik_tarih_entry.set_date(
-                        datetime.strptime(son_odeme_gecerlilik_tarihi_str, "%Y-%m-%d").date())
-                except ValueError:
-                    self.fatura_belge_tarih_entry.set_date(datetime.now().date())
-                    self.fatura_son_odeme_gecerlilik_tarih_entry.set_date(datetime.now().date())
-
-                # Ürün/hizmetler JSON'ını ayrıştır ve Text widget'ına yaz
-                urun_hizmetler_list = json.loads(urun_hizmetler_json)
-                urun_hizmetler_text_content = ""
-                for item in urun_hizmetler_list:
-                    # Sayısal değerleri string'e dönüştürürken virgül kullan ve ondalık basamakları koru
-                    miktar = f"{item.get('miktar', 0):g}".replace(".", ",")
-                    birim_fiyat = f"{item.get('birim_fiyat', 0):g}".replace(".", ",")
-                    kdv_orani = f"{item.get('kdv_orani', 0):g}".replace(".", ",")
-
-                    urun_hizmetler_text_content += f"{item.get('ad', '')},{miktar},{birim_fiyat},{kdv_orani}\n"
-
-                self.fatura_urun_hizmetler_text.delete("1.0", tk.END)
-                self.fatura_urun_hizmetler_text.insert("1.0", urun_hizmetler_text_content.strip())
-
-                # Toplam tutar alanlarını güncelle ve salt okunur yap
-                self.fatura_kdv_haric_toplam_entry.config(state="normal")
-                self.fatura_kdv_haric_toplam_entry.delete(0, tk.END)
-                self.fatura_kdv_haric_toplam_entry.insert(0, f"{toplam_tutar:,.2f}".replace(".", ","))
-                self.fatura_kdv_haric_toplam_entry.config(state="readonly")
-
-                self.fatura_toplam_kdv_entry.config(state="normal")
-                self.fatura_toplam_kdv_entry.delete(0, tk.END)
-                self.fatura_toplam_kdv_entry.insert(0, f"{toplam_kdv:,.2f}".replace(".", ","))
-                self.fatura_toplam_kdv_entry.config(state="readonly")
-
-                self.fatura_genel_toplam_entry.config(state="normal")
-                self.fatura_genel_toplam_entry.delete(0, tk.END)
-                self.fatura_genel_toplam_entry.insert(0, f"{(toplam_tutar + toplam_kdv):,.2f}".replace(".", ","))
-                self.fatura_genel_toplam_entry.config(state="readonly")
-
-                self.fatura_notlar_text.delete("1.0", tk.END)
-                self.fatura_notlar_text.insert("1.0", notlar)
-                self.fatura_durum_var.set(durum)
-        else:
-            self.selected_invoice_id = None
-            self.fatura_temizle()
-
-    def fatura_pdf_olustur(self):
-        """Seçili fatura/teklif için PDF oluşturur ve kaydeder."""
-        if self.selected_invoice_id is None:
-            messagebox.showwarning("Uyarı", "Lütfen PDF'ini oluşturmak istediğiniz fatura/teklifi seçiniz.")
-            return
-
-        fatura_data = self.db_manager.get_invoice_offer_by_id(self.selected_invoice_id, self.kullanici_id)
-
-        if not fatura_data:
-            messagebox.showerror("Hata", "Seçilen fatura/teklif bulunamadı.")
-            return
-
-        # DatabaseManager'dan dönen verinin 12 elemanlı olduğundan emin ol
-        if len(fatura_data) != 12:
-            messagebox.showerror("Hata",
-                                 f"Fatura verisi eksik veya yanlış formatta. PDF oluşturulamıyor. Beklenen 12, alınan {len(fatura_data)} değer.")
-            return
-
-        musteri_adi = fatura_data[3]  # Müşteri adını al
-        customer_info_full = self.db_manager.get_customer_by_name(musteri_adi, self.kullanici_id)
-
-        # customer_info_full (id, musteri_adi, adres, telefon, email)
-        # PDFGenerator'a sadece adres, telefon, email (indeks 2, 3, 4) göndermeliyiz
-        # Güvenli erişim için kontrol ekle
-        customer_info_for_pdf = (
-            customer_info_full[2] if customer_info_full and len(customer_info_full) > 2 else None,
-            customer_info_full[3] if customer_info_full and len(customer_info_full) > 3 else None,
-            customer_info_full[4] if customer_info_full and len(customer_info_full) > 4 else None
-        )
-
-        # Dosya kaydetme diyaloğu
-        file_path = filedialog.asksaveasfilename(
-            defaultextension=".pdf",
-            filetypes=[("PDF Dosyaları", "*.pdf")],
-            title=f"{fatura_data[1]} Kaydet",  # Başlıkta fatura/teklif türünü göster
-            initialfile=f"{fatura_data[2]}_{musteri_adi}.pdf"  # Başlangıç dosya adı: BelgeNo_MüşteriAdı.pdf
-        )
-        if not file_path:
-            return
-
-        try:
-            self.pdf_generator.generate_invoice_offer_pdf(fatura_data, customer_info_for_pdf, file_path)
-            messagebox.showinfo("Başarılı", f"{fatura_data[1]} PDF'i başarıyla kaydedildi:\n{file_path}")
-        except Exception as e:
-            messagebox.showerror("Hata",
-                                 f"PDF raporu oluşturulurken hata oluştu: {e}\nPDF kütüphanesi Türkçe karakter desteği için ek font ayarları gerektirebilir. Lütfen 'veriler.db' dosyanızı silip tekrar deneyin.")
-
-    # --- Müşteri Yönetimi Fonksiyonları ---
-    def listele_musteriler(self):
-        """Müşterileri veritabanından yükler ve ilgili combobox'ları günceller."""
-        for row in self.musteri_liste.get_children():
-            self.musteri_liste.delete(row)
-
-        try:
-            musteriler = self.db_manager.get_customers(self.kullanici_id)
-
-            musteri_adlari = []
-            for musteri in musteriler:
-                self.musteri_liste.insert("", tk.END, values=musteri)
-                musteri_adlari.append(musteri[1])  # Müşteri adını fatura combobox'ı için sakla
-
-            # Fatura/Teklif ekranındaki müşteri combobox'ını güncelle
-            self.fatura_musteri_combobox['values'] = musteri_adlari
-            if musteri_adlari:
-                self.fatura_musteri_var.set(musteri_adlari[0])  # İlk müşteriyi varsayılan olarak seç
-            else:
-                self.fatura_musteri_var.set("")  # Müşteri yoksa boş bırak
-
-        except Exception as e:
-            messagebox.showerror("Veritabanı Hatası", f"Müşteriler yüklenirken hata oluştu: {e}")
-
-    def musteri_ekle(self):
-        """Yeni bir müşteri ekler."""
-        musteri_adi = self.musteri_adi_entry.get().strip()
-        adres = self.musteri_adres_entry.get().strip()
-        telefon = self.musteri_telefon_entry.get().strip()
-        email = self.musteri_email_entry.get().strip()
-
-        if not musteri_adi:
-            messagebox.showerror("Hata", "Müşteri adı boş bırakılamaz.")
-            return
-
-        try:
-            # Müşteri adının benzersizliğini kontrol et
-            if self.db_manager.get_customer_by_name(musteri_adi, self.kullanici_id):
-                messagebox.showerror("Hata", "Bu müşteri adı zaten mevcut.")
-                return
-
-            self.db_manager.insert_customer(musteri_adi, adres, telefon, email, self.kullanici_id)
-            messagebox.showinfo("Başarılı", "Müşteri başarıyla eklendi.")
-            self.temizle_musteri()
-            self.listele_musteriler()  # Müşteri listesini ve fatura combobox'ını güncelle
-        except Exception as e:
-            messagebox.showerror("Hata", f"Müşteri eklenirken hata oluştu: {e}")
-
-    def musteri_guncelle(self):
-        """Mevcut bir müşteriyi günceller."""
-        if self.selected_customer_id is None:
-            messagebox.showwarning("Uyarı", "Lütfen güncellemek istediğiniz müşteriyi seçiniz.")
-            return
-
-        musteri_adi = self.musteri_adi_entry.get().strip()
-        adres = self.musteri_adres_entry.get().strip()
-        telefon = self.musteri_telefon_entry.get().strip()
-        email = self.musteri_email_entry.get().strip()
-
-        if not musteri_adi:
-            messagebox.showerror("Hata", "Müşteri adı boş bırakılamaz.")
-            return
-
-        try:
-            # Mevcut müşteri adını al (güncelleme sonrası ad değişimi için)
-            current_musteri_info = self.db_manager.get_customer_by_id(self.selected_customer_id)
-            current_musteri_adi = current_musteri_info[0] if current_musteri_info else ""
-
-            # Eğer müşteri adı değiştiyse ve yeni ad zaten varsa hata ver
-            if musteri_adi != current_musteri_adi:
-                if self.db_manager.get_customer_by_name(musteri_adi, self.kullanici_id):
-                    messagebox.showerror("Hata", "Bu müşteri adı zaten mevcut.")
-                    return
-
-            self.db_manager.update_customer(self.selected_customer_id, musteri_adi, adres, telefon, email,
-                                            self.kullanici_id)
-
-            # Müşteri adı değiştiyse, faturalardaki eski müşteri adlarını yeni adla güncelle
-            if musteri_adi != current_musteri_adi:
-                self.db_manager.update_invoice_customer_name(current_musteri_adi, musteri_adi, self.kullanici_id)
-
-            messagebox.showinfo("Başarılı", "Müşteri başarıyla güncellendi.")
-            self.temizle_musteri()
-            self.listele_musteriler()  # Müşteri listesini ve fatura combobox'ını güncelle
-            self.listele_fatura_teklifler()  # Fatura/Teklif listesini güncelle (müşteri adı değişimi yansısın)
-
-        except Exception as e:
-            messagebox.showerror("Hata", f"Müşteri güncellenirken hata oluştu: {e}")
-
-    def musteri_sil(self):
-        """Seçili müşteriyi siler."""
-        if self.selected_customer_id is None:
-            messagebox.showwarning("Uyarı", "Lütfen silmek istediğiniz müşteriyi seçiniz.")
-            return
-
-        musteri_adi_data = self.db_manager.get_customer_by_id(self.selected_customer_id)
-        musteri_adi = musteri_adi_data[0] if musteri_adi_data else ""
-
-        # Bu müşterinin kaç fatura/teklifte kullanıldığını kontrol et
-        fatura_sayisi = self.db_manager.count_invoices_by_customer(musteri_adi, self.kullanici_id)
-
-        onay_mesaji = ""
-        if fatura_sayisi > 0:
-            onay_mesaji = f"'{musteri_adi}' müşterisi {fatura_sayisi} adet fatura/teklifte kullanılmaktadır. Bu müşteriyi silerseniz, bu belgelerdeki müşteri adı boş kalacaktır. Emin misiniz?"
-        else:
-            onay_mesaji = f"'{musteri_adi}' müşterisini silmek istediğinize emin misiniz?"
-
-        onay = messagebox.askyesno("Onay", onay_mesaji)
-
-        if onay:
-            try:
-                # Müşterinin kullanıldığı fatura/tekliflerde müşteri adını "Silinmiş Müşteri" yap
-                self.db_manager.update_invoice_customer_name(musteri_adi, 'Silinmiş Müşteri', self.kullanici_id)
-                self.db_manager.delete_customer(self.selected_customer_id, self.kullanici_id)
-                messagebox.showinfo("Başarılı", "Müşteri başarıyla silindi.")
-                self.temizle_musteri()
-                self.listele_musteriler()  # Müşteri listesini ve fatura combobox'ını güncelle
-                self.listele_fatura_teklifler()  # Fatura/Teklif listesini güncelle
-            except Exception as e:
-                messagebox.showerror("Hata", f"Müşteri silinirken hata oluştu: {e}")
-
-    def musteri_liste_secildi(self, event):
-        """Müşteri listesinden bir öğe seçildiğinde giriş alanlarını doldurur."""
-        selected_items = self.musteri_liste.selection()
-        if selected_items:
-            selected_item = selected_items[0]
-            values = self.musteri_liste.item(selected_item, "values")
-            self.selected_customer_id = values[0]  # Seçili müşteri ID'si
-
-            # Giriş alanlarını seçilen verilerle doldur
-            self.musteri_adi_entry.delete(0, tk.END)
-            self.musteri_adi_entry.insert(0, values[1])
-            self.musteri_adres_entry.delete(0, tk.END)
-            self.musteri_adres_entry.insert(0, values[2])
-            self.musteri_telefon_entry.delete(0, tk.END)
-            self.musteri_telefon_entry.insert(0, values[3])
-            self.musteri_email_entry.delete(0, tk.END)
-            self.musteri_email_entry.insert(0, values[4])
-        else:
-            self.selected_customer_id = None
-            self.temizle_musteri()
-
-    def temizle_musteri(self):
-        """Müşteri giriş alanlarını temizler."""
-        self.musteri_adi_entry.delete(0, tk.END)
-        self.musteri_adres_entry.delete(0, tk.END)
-        self.musteri_telefon_entry.delete(0, tk.END)
-        self.musteri_email_entry.delete(0, tk.END)
-        self.selected_customer_id = None
-
-    # --- Envanter Yönetimi Fonksiyonları ---
-    def listele_urunler(self):
-        """Ürünleri veritabanından yükler ve ilgili combobox'ları günceller."""
-        for row in self.urun_liste.get_children():
-            self.urun_liste.delete(row)
-
-        try:
-            urunler = self.db_manager.get_products(self.kullanici_id)
-
-            urun_adlari = []
-            for urun in urunler:
-                formatted_urun = list(urun)
-                # Sayısal değerleri formatla (virgül ve ondalık basamaklar)
-                formatted_urun[2] = f"{urun[2]:g}".replace(".", ",")  # Stok miktarı (tam sayı veya ondalık)
-                formatted_urun[3] = f"{urun[3]:,.2f}".replace(".", ",")  # Alış fiyatı
-                formatted_urun[4] = f"{urun[4]:,.2f}".replace(".", ",")  # Satış fiyatı
-                formatted_urun[5] = f"{urun[5]:g}".replace(".", ",")  # KDV oranı
-                self.urun_liste.insert("", tk.END, values=formatted_urun)
-                urun_adlari.append(urun[1])  # Ürün adını fatura ürün seçimi için sakla
-
-            # Fatura ekranındaki ürün seçim combobox'ını güncelle
-            self.fatura_urun_sec_combobox['values'] = urun_adlari
-            if urun_adlari:
-                self.fatura_urun_sec_var.set(urun_adlari[0])  # İlk ürünü varsayılan olarak seç
-            else:
-                self.fatura_urun_sec_var.set("")
-
-
-        except Exception as e:
-            messagebox.showerror("Veritabanı Hatası", f"Ürünler yüklenirken hata oluştu: {e}")
-
     def urun_ekle(self):
-        """Yeni bir ürün ekler."""
-        urun_adi = self.urun_adi_entry.get().strip()
-        stok_miktari_str = self.stok_miktari_entry.get().strip().replace(",", ".")
-        alis_fiyati_str = self.alis_fiyati_entry.get().strip().replace(",", ".")
-        satis_fiyati_str = self.satis_fiyati_entry.get().strip().replace(",", ".")
-        kdv_orani_str = self.urun_kdv_orani_var.get().strip().replace(",", ".")
+        ad = self.urun_ad_entry.get().strip()
+        stok_str = self.urun_stok_entry.get()
+        alis_fiyat_str = self.urun_alis_fiyat_entry.get()
+        satis_fiyat_str = self.urun_satis_fiyat_entry.get()
+        kdv_oran_str = self.urun_kdv_oran_entry.get()
 
-        if not urun_adi:
-            messagebox.showerror("Hata", "Ürün adı boş bırakılamaz.")
+        if not ad or not stok_str or not satis_fiyat_str:
+            self.show_error("Hata", "Lütfen ürün adı, stok ve satış fiyatını girin.")
             return
 
         try:
-            stok_miktari = float(stok_miktari_str)
-            alis_fiyati = float(alis_fiyati_str)
-            satis_fiyati = float(satis_fiyati_str)
-            kdv_orani = float(kdv_orani_str)
+            stok = float(stok_str)
+            satis_fiyat = float(satis_fiyat_str)
+            alis_fiyat = float(alis_fiyat_str) if alis_fiyat_str else 0.0  # Opsiyonel
+            kdv_oran = float(kdv_oran_str) if kdv_oran_str else 0.0
 
-            if stok_miktari < 0 or alis_fiyati < 0 or satis_fiyati < 0 or kdv_orani < 0:
-                messagebox.showerror("Hata", "Miktar ve fiyatlar negatif olamaz.")
+            if stok < 0 or satis_fiyat <= 0 or alis_fiyat < 0 or kdv_oran < 0:
+                self.show_error("Hata",
+                                "Miktar, fiyat ve KDV oranları pozitif veya sıfır olmalıdır (satış fiyatı pozitif).")
                 return
+
         except ValueError:
-            messagebox.showerror("Hata", "Geçersiz sayısal değerler. Lütfen sayı giriniz.")
+            self.show_error("Hata", "Miktar, fiyat ve KDV oranları geçerli sayılar olmalıdır.")
             return
 
-        try:
-            # Ürün adının benzersizliğini kontrol et
-            if self.db_manager.get_product_by_name(urun_adi, self.kullanici_id):
-                messagebox.showerror("Hata", "Bu ürün adı zaten mevcut.")
-                return
+        if self.db_manager.get_product_by_name(ad, self.kullanici_id):
+            self.show_error("Hata", f"'{ad}' adında bir ürün/hizmet zaten mevcut.")
+            return
 
-            self.db_manager.insert_product(urun_adi, stok_miktari, alis_fiyati, satis_fiyati, kdv_orani,
-                                           self.kullanici_id)
-            messagebox.showinfo("Başarılı", "Ürün başarıyla eklendi.")
-            self.temizle_urun()
-            self.listele_urunler()  # Ürün listesini güncelle
-        except Exception as e:
-            messagebox.showerror("Hata", f"Ürün eklenirken hata oluştu: {e}")
+        self.db_manager.insert_product(ad, stok, alis_fiyat, satis_fiyat, kdv_oran, self.kullanici_id)
+        self.show_message("Başarılı", f"'{ad}' ürünü başarıyla eklendi.")
+        self.listele_urunler()
+        self.temizle_urun()
 
     def urun_guncelle(self):
-        """Mevcut bir ürünü günceller."""
-        if self.selected_product_id is None:
-            messagebox.showwarning("Uyarı", "Lütfen güncellemek istediğiniz ürünü seçiniz.")
+        if not self.selected_product_id:
+            self.show_warning("Uyarı", "Lütfen güncellemek için bir ürün seçin.")
             return
 
-        urun_adi = self.urun_adi_entry.get().strip()
-        stok_miktari_str = self.stok_miktari_entry.get().strip().replace(",", ".")
-        alis_fiyati_str = self.alis_fiyati_entry.get().strip().replace(",", ".")
-        satis_fiyati_str = self.satis_fiyati_entry.get().strip().replace(",", ".")
-        kdv_orani_str = self.urun_kdv_orani_var.get().strip().replace(",", ".")
+        ad = self.urun_ad_entry.get().strip()
+        stok_str = self.urun_stok_entry.get()
+        alis_fiyat_str = self.urun_alis_fiyat_entry.get()
+        satis_fiyat_str = self.urun_satis_fiyat_entry.get()
+        kdv_oran_str = self.urun_kdv_oran_entry.get()
 
-        if not urun_adi:
-            messagebox.showerror("Hata", "Ürün adı boş bırakılamaz.")
+        if not ad or not stok_str or not satis_fiyat_str:
+            self.show_error("Hata", "Lütfen ürün adı, stok ve satış fiyatını girin.")
             return
 
         try:
-            stok_miktari = float(stok_miktari_str)
-            alis_fiyati = float(alis_fiyati_str)
-            satis_fiyati = float(satis_fiyati_str)
-            kdv_orani = float(kdv_orani_str)
+            stok = float(stok_str)
+            satis_fiyat = float(satis_fiyat_str)
+            alis_fiyat = float(alis_fiyat_str) if alis_fiyat_str else 0.0
+            kdv_oran = float(kdv_oran_str) if kdv_oran_str else 0.0
 
-            if stok_miktari < 0 or alis_fiyati < 0 or satis_fiyati < 0 or kdv_orani < 0:
-                messagebox.showerror("Hata", "Miktar ve fiyatlar negatif olamaz.")
+            if stok < 0 or satis_fiyat <= 0 or alis_fiyat < 0 or kdv_oran < 0:
+                self.show_error("Hata",
+                                "Miktar, fiyat ve KDV oranları pozitif veya sıfır olmalıdır (satış fiyatı pozitif).")
                 return
+
         except ValueError:
-            messagebox.showerror("Hata", "Geçersiz sayısal değerler. Lütfen sayı giriniz.")
+            self.show_error("Hata", "Miktar, fiyat ve KDV oranları geçerli sayılar olmalıdır.")
             return
 
-        try:
-            # Güncellenecek ürünün mevcut adını al (benzersizlik kontrolü için)
-            current_urun_info = self.db_manager.get_product_by_name(
-                self.urun_liste.item(self.urun_liste.selection()[0], "values")[1], self.kullanici_id)
-            current_urun_adi = current_urun_info[1] if current_urun_info else ""
-
-            # Eğer ürün adı değiştiyse ve yeni ad zaten varsa hata ver
-            if urun_adi != current_urun_adi and self.db_manager.get_product_by_name(urun_adi, self.kullanici_id):
-                messagebox.showerror("Hata", "Bu ürün adı zaten mevcut.")
-                return
-
-            self.db_manager.update_product(self.selected_product_id, urun_adi, stok_miktari, alis_fiyati, satis_fiyati,
-                                           kdv_orani, self.kullanici_id)
-            messagebox.showinfo("Başarılı", "Ürün başarıyla güncellendi.")
-            self.temizle_urun()
-            self.listele_urunler()
-        except Exception as e:
-            messagebox.showerror("Hata", f"Ürün güncellenirken hata oluştu: {e}")
-
-    def urun_sil(self):
-        """Seçili ürünü siler."""
-        if self.selected_product_id is None:
-            messagebox.showwarning("Uyarı", "Lütfen silmek istediğiniz ürünü seçiniz.")
+        old_name = self.urun_liste.item(self.selected_product_id, "values")[1]
+        if ad != old_name and self.db_manager.get_product_by_name(ad, self.kullanici_id):
+            self.show_error("Hata", f"'{ad}' adında başka bir ürün/hizmet zaten mevcut.")
             return
 
-        # Silinecek ürünün adını al
-        product_data = self.db_manager.get_product_by_name(
-            self.urun_liste.item(self.urun_liste.selection()[0], "values")[1], self.kullanici_id)
-        urun_adi = product_data[1] if product_data else ""
-
-        onay = messagebox.askyesno("Onay",
-                                   f"'{urun_adi}' ürününü silmek istediğinize emin misiniz? Bu ürün faturalarda yer alıyorsa, faturalardaki verilerde tutarsızlık olabilir.")
-        if onay:
-            try:
-                self.db_manager.delete_product(self.selected_product_id, self.kullanici_id)
-                messagebox.showinfo("Başarılı", "Ürün başarıyla silindi.")
-                self.temizle_urun()
-                self.listele_urunler()  # Ürün listesini güncelle
-            except Exception as e:
-                messagebox.showerror("Hata", f"Ürün silinirken hata oluştu: {e}")
-
-    def urun_liste_secildi(self, event):
-        """Ürün listesinden bir öğe seçildiğinde giriş alanlarını doldurur."""
-        selected_items = self.urun_liste.selection()
-        if selected_items:
-            selected_item = selected_items[0]
-            values = self.urun_liste.item(selected_item, "values")
-            self.selected_product_id = values[0]  # Seçili ürün ID'si
-
-            # Giriş alanlarını seçilen verilerle doldur
-            self.urun_adi_entry.delete(0, tk.END)
-            self.urun_adi_entry.insert(0, values[1])
-            self.stok_miktari_entry.delete(0, tk.END)
-            self.stok_miktari_entry.insert(0, values[2])  # Virgül formatında göster
-            self.alis_fiyati_entry.delete(0, tk.END)
-            self.alis_fiyati_entry.insert(0, values[3])  # Virgül formatında göster
-            self.satis_fiyati_entry.delete(0, tk.END)
-            self.satis_fiyati_entry.insert(0, values[4])  # Virgül formatında göster
-            self.urun_kdv_orani_var.set(values[5])  # KDV oranı
-
-        else:
-            self.selected_product_id = None
-            self.temizle_urun()
-
-    def temizle_urun(self):
-        """Ürün giriş alanlarını temizler."""
-        self.urun_adi_entry.delete(0, tk.END)
-        self.stok_miktari_entry.delete(0, tk.END)
-        self.alis_fiyati_entry.delete(0, tk.END)
-        self.satis_fiyati_entry.delete(0, tk.END)
-        self.urun_kdv_orani_var.set("18")  # Varsayılan KDV oranı
+        self.db_manager.update_product(self.selected_product_id, ad, stok, alis_fiyat, satis_fiyat, kdv_oran,
+                                       self.kullanici_id)
+        self.show_message("Başarılı", f"'{ad}' ürünü başarıyla güncellendi.")
+        self.listele_urunler()
+        self.temizle_urun()
         self.selected_product_id = None
 
-    # --- Vergi Raporları Fonksiyonları ---
-    def vergi_raporu_getir(self):
-        """Belirli bir tarih aralığı için vergi raporu özetini getirir."""
-        bas_tarih = self.vergi_bas_tarih_entry.get_date().strftime("%Y-%m-%d")
-        bit_tarih = self.vergi_bit_tarih_entry.get_date().strftime("%Y-%m-%d")
+    def urun_sil(self):
+        if not self.selected_product_id:
+            self.show_warning("Uyarı", "Lütfen silmek için bir ürün seçin.")
+            return
+
+        item_values = self.urun_liste.item(self.selected_product_id, "values")
+        product_name = item_values[1]
+
+        # Ürünün fatura/tekliflerde kullanılıp kullanılmadığını kontrol etmek daha karmaşık
+        # Şimdilik, fatura/tekliflerdeki ürünler JSON içinde olduğu için doğrudan kontrol edemiyoruz.
+        # Bu yüzden burada bir uyarı vermiyoruz, doğrudan siliyoruz. Ancak gerçek bir uygulamada bu kontrol edilmeli.
+
+        if messagebox.askyesno("Onay", f"Seçili ürünü ('{product_name}') silmek istediğinizden emin misiniz?"):
+            self.db_manager.delete_product(self.selected_product_id, self.kullanici_id)
+            self.show_message("Başarılı", "Ürün başarıyla silindi.")
+            self.listele_urunler()
+            self.temizle_urun()
+            self.selected_product_id = None
+
+    def temizle_urun(self):
+        self.urun_ad_entry.delete(0, tk.END)
+        self.urun_stok_entry.delete(0, tk.END)
+        self.urun_alis_fiyat_entry.delete(0, tk.END)
+        self.urun_satis_fiyat_entry.delete(0, tk.END)
+        self.urun_kdv_oran_entry.delete(0, tk.END)
+        self.urun_kdv_oran_entry.insert(0, "18.0")  # Varsayılan KDV oranı
+        self.selected_product_id = None
+        self.urun_liste.selection_remove(self.urun_liste.selection())
+
+    def listele_urunler(self, combobox_widget=None):
+        """Ürünleri veritabanından çeker ve Treeview'da/Combobox'ta listeler."""
+        urunler = self.db_manager.get_products(self.kullanici_id)
+
+        if combobox_widget:  # Eğer bir combobox widget'ı belirtildiyse sadece onu güncelle
+            urun_adlari = [u[1] for u in urunler]
+            combobox_widget['values'] = urun_adlari
+            if not combobox_widget.get() in urun_adlari:
+                combobox_widget.set("")  # Eğer seçili ürün yoksa veya kaldırıldıysa temizle
+            return
+
+        # Treeview'ı güncelle
+        for i in self.urun_liste.get_children():
+            self.urun_liste.delete(i)
+        for row in urunler:
+            self.urun_liste.insert("", "end", values=row)
+
+        # Fatura/Teklif ekranındaki ürün combobox'ını da güncelle
+        if hasattr(self, 'fatura_urun_sec_combobox'):
+            urun_adlari = [u[1] for u in urunler]
+            self.fatura_urun_sec_combobox['values'] = urun_adlari
+            if not self.fatura_urun_sec_var.get() in urun_adlari:
+                self.fatura_urun_sec_var.set("")  # Eğer seçili ürün yoksa veya kaldırıldıysa temizle
+
+    def urun_liste_secildi(self, event):
+        """Ürün Treeview'ında bir satır seçildiğinde giriş alanlarını doldurur."""
+        selected_item = self.urun_liste.focus()
+        if selected_item:
+            values = self.urun_liste.item(selected_item, "values")
+            self.selected_product_id = values[0]
+
+            self.urun_ad_entry.delete(0, tk.END)
+            self.urun_ad_entry.insert(0, values[1])
+            self.urun_stok_entry.delete(0, tk.END)
+            self.urun_stok_entry.insert(0, str(values[2]))
+            self.urun_alis_fiyat_entry.delete(0, tk.END)
+            self.urun_alis_fiyat_entry.insert(0, str(values[3]))
+            self.urun_satis_fiyat_entry.delete(0, tk.END)
+            self.urun_satis_fiyat_entry.insert(0, str(values[4]))
+            self.urun_kdv_oran_entry.delete(0, tk.END)
+            self.urun_kdv_oran_entry.insert(0, str(values[5]))
+        else:
+            self.temizle_urun()
+
+    # --- Vergi Raporları Sekmesi Fonksiyonları ---
+    def _vergi_raporlari_arayuzu_olustur(self, parent_frame):
+        """Vergi raporları sekmesinin arayüzünü oluşturur."""
+        tax_report_frame = ttk.LabelFrame(parent_frame, text="KDV Raporu Oluştur", padding=15)
+        tax_report_frame.pack(padx=10, pady=10, fill="x", expand=False)
+
+        ttk.Label(tax_report_frame, text="Başlangıç Tarihi:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
+        self.tax_start_date_entry = DateEntry(tax_report_frame, width=12, background='darkblue', foreground='white',
+                                              borderwidth=2, date_pattern='yyyy-mm-dd')
+        self.tax_start_date_entry.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        self.tax_start_date_entry.set_date((datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d"))
+
+        ttk.Label(tax_report_frame, text="Bitiş Tarihi:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
+        self.tax_end_date_entry = DateEntry(tax_report_frame, width=12, background='darkblue', foreground='white',
+                                            borderwidth=2, date_pattern='yyyy-mm-dd')
+        self.tax_end_date_entry.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
+        self.tax_end_date_entry.set_date(datetime.now().strftime("%Y-%m-%d"))
+
+        generate_report_button = ttk.Button(tax_report_frame, text="Rapor Oluştur", command=self.vergi_raporu_olustur)
+        generate_report_button.grid(row=2, column=0, columnspan=2, pady=10, sticky="ew")
+
+        # Rapor Sonuç Çerçevesi
+        report_results_frame = ttk.LabelFrame(parent_frame, text="KDV Rapor Sonuçları", padding=15)
+        report_results_frame.pack(padx=10, pady=10, fill="both", expand=True)
+
+        self.kdv_report_text = tk.Text(report_results_frame, height=15, wrap="word", state="disabled")
+        self.kdv_report_text.pack(fill="both", expand=True, padx=5, pady=5)
+
+        kdv_report_scrollbar = ttk.Scrollbar(report_results_frame, orient="vertical",
+                                             command=self.kdv_report_text.yview)
+        self.kdv_report_text.configure(yscrollcommand=kdv_report_scrollbar.set)
+        kdv_report_scrollbar.pack(side="right", fill="y")
+
+    def vergi_raporu_olustur(self):
+        """Belirli bir tarih aralığı için KDV raporunu oluşturur."""
+        start_date = self.tax_start_date_entry.get()
+        end_date = self.tax_end_date_entry.get()
+
+        if not start_date or not end_date:
+            self.show_error("Hata", "Lütfen başlangıç ve bitiş tarihini girin.")
+            return
 
         try:
-            # Toplam satış KDV'sini veritabanından al
-            toplam_satis_kdv = self.db_manager.get_total_sales_kdv(bas_tarih, bit_tarih, self.kullanici_id)
+            start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+            end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+            if start_dt > end_dt:
+                self.show_error("Hata", "Başlangıç tarihi bitiş tarihinden sonra olamaz.")
+                return
+        except ValueError:
+            self.show_error("Hata", "Geçersiz tarih formatı. LütfenYYYY-MM-DD formatını kullanın.")
+            return
 
-            # KDV oranlarına göre detaylı dağılım için faturaların JSON verilerini çek
-            fatura_json_verileri = self.db_manager.get_invoice_jsons_for_tax_report(bas_tarih, bit_tarih,
-                                                                                    self.kullanici_id)
+        total_sales_kdv = self.db_manager.get_total_sales_kdv(start_date, end_date, self.kullanici_id)
+        invoice_items_jsons = self.db_manager.get_invoice_jsons_for_tax_report(start_date, end_date, self.kullanici_id)
 
-            kdv_oran_detaylari = {}  # {KDV_Oranı: Toplam_KDV_Miktarı} sözlüğü
+        kdv_by_rate = {}
+        for item_json_tuple in invoice_items_jsons:
+            if item_json_tuple and item_json_tuple[0]:
+                items = json.loads(item_json_tuple[0])
+                for item in items:
+                    rate = item.get("kdv_orani", 0.0)
+                    amount = item.get("kdv_miktari", 0.0)
+                    kdv_by_rate[rate] = kdv_by_rate.get(rate, 0.0) + amount
 
-            for json_data_tuple in fatura_json_verileri:
-                if json_data_tuple[0]:  # JSON verisi boş değilse
-                    try:
-                        items = json.loads(json_data_tuple[0])  # JSON'ı Python listesine dönüştür
-                        for item in items:
-                            kdv_orani = item.get('kdv_orani', 0.0)
-                            kdv_miktari = item.get('kdv_miktari', 0.0)
-                            # Her KDV oranı için toplam miktarı güncelle
-                            kdv_oran_detaylari[kdv_orani] = kdv_oran_detaylari.get(kdv_orani, 0.0) + kdv_miktari
-                    except json.JSONDecodeError:
-                        print(f"Hata: Geçersiz JSON verisi: {json_data_tuple[0]}")
-                        continue
+        report_content = f"--- KDV Raporu ({start_date} - {end_date}) ---\n\n"
+        report_content += f"Toplam Satış KDV'si: {total_sales_kdv:.2f} TL\n\n"
+        report_content += "KDV Oranlarına Göre Dağılım:\n"
 
-            # Toplam Satış KDV'sini güncelle
-            self.toplam_satis_kdv_label.config(text=f"₺{toplam_satis_kdv:,.2f}".replace(".", ","))
+        if not kdv_by_rate:
+            report_content += "   Belirtilen tarih aralığında KDV bilgisi bulunan satış işlemi yok.\n"
+        else:
+            for rate, amount in sorted(kdv_by_rate.items()):
+                report_content += f"   KDV %{rate:.2f}: {amount:.2f} TL\n"
 
-            # Toplam Alış KDV'si (şu an için manuel veya 0.0, gelecekte entegre edilebilir)
-            toplam_alis_kdv = 0.0
-            self.toplam_alis_kdv_label.config(text=f"₺{toplam_alis_kdv:,.2f}".replace(".", ","))
+        self.kdv_report_text.config(state="normal")
+        self.kdv_report_text.delete("1.0", tk.END)
+        self.kdv_report_text.insert("1.0", report_content)
+        self.kdv_report_text.config(state="disabled")
 
-            # Ödenecek/İade Edilecek KDV farkını hesapla ve güncelle
-            kdv_farki = toplam_satis_kdv - toplam_alis_kdv
-            self.kdv_farki_label.config(text=f"₺{kdv_farki:,.2f}".replace(".", ","),
-                                        foreground="red" if kdv_farki > 0 else "green")
+    # --- YENİ EKLENEN: Tasarruf Hedefleri Sekmesi Fonksiyonları ---
+    def _tasarruf_hedefleri_arayuzu_olustur(self, parent_frame):
+        """Tasarruf hedefleri sekmesinin arayüzünü oluşturur."""
+        input_frame = ttk.LabelFrame(parent_frame, text="Tasarruf Hedefi Ekle/Güncelle", padding=15)
+        input_frame.pack(padx=10, pady=10, fill="x")
 
-            # KDV Detay Tablosunu güncelle
-            for row in self.kdv_detay_liste.get_children():
-                self.kdv_detay_liste.delete(row)
+        input_frame.grid_columnconfigure(1, weight=1)
 
-            # KDV detaylarını oranlara göre sırala ve tabloya ekle
-            sorted_kdv_detaylari = sorted(kdv_oran_detaylari.items())
-            for oran, tutar in sorted_kdv_detaylari:
-                self.kdv_detay_liste.insert("", tk.END,
-                                            values=(f"%{oran:g}".replace(".", ","), f"{tutar:,.2f}".replace(".", ",")))
+        ttk.Label(input_frame, text="Hedef Adı:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
+        self.goal_name_entry = ttk.Entry(input_frame)
+        self.goal_name_entry.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
 
-        except Exception as e:
-            messagebox.showerror("Hata", f"Vergi raporu getirilirken hata oluştu: {e}")
+        ttk.Label(input_frame, text="Hedef Miktar (TL):").grid(row=1, column=0, padx=5, pady=5, sticky="w")
+        self.goal_target_amount_entry = ttk.Entry(input_frame)
+        self.goal_target_amount_entry.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
+
+        ttk.Label(input_frame, text="Mevcut Birikmiş Miktar (TL):").grid(row=2, column=0, padx=5, pady=5, sticky="w")
+        self.goal_current_amount_entry = ttk.Entry(input_frame)
+        self.goal_current_amount_entry.grid(row=2, column=1, padx=5, pady=5, sticky="ew")
+        self.goal_current_amount_entry.insert(0, "0.00")  # Varsayılan olarak 0
+
+        ttk.Label(input_frame, text="Hedef Tarihi:").grid(row=3, column=0, padx=5, pady=5, sticky="w")
+        self.goal_target_date_entry = DateEntry(input_frame, width=12, background='darkblue', foreground='white',
+                                                borderwidth=2, date_pattern='yyyy-mm-dd')
+        self.goal_target_date_entry.grid(row=3, column=1, padx=5, pady=5, sticky="ew")
+        self.goal_target_date_entry.set_date(datetime.now().strftime("%Y-%m-%d"))  # Varsayılan bugünün tarihi
+
+        ttk.Label(input_frame, text="Açıklama/Notlar:").grid(row=4, column=0, padx=5, pady=5, sticky="w")
+        self.goal_notes_text = tk.Text(input_frame, height=3, width=30)
+        self.goal_notes_text.grid(row=4, column=1, padx=5, pady=5, sticky="ew")
+
+        action_buttons_frame = ttk.Frame(input_frame)
+        action_buttons_frame.grid(row=5, column=0, columnspan=2, pady=10)
+        ttk.Button(action_buttons_frame, text="Hedef Ekle", command=self.kaydet_tasarruf_hedefi).pack(side="left",
+                                                                                                      padx=5)
+        ttk.Button(action_buttons_frame, text="Hedefi Güncelle", command=self.guncelle_tasarruf_hedefi).pack(
+            side="left", padx=5)
+        ttk.Button(action_buttons_frame, text="Temizle", command=self.temizle_tasarruf_hedefi).pack(side="left", padx=5)
+
+        list_frame = ttk.LabelFrame(parent_frame, text="Mevcut Tasarruf Hedefleri")  # parent_frame kullanıldı
+        list_frame.pack(padx=10, pady=10, fill="both", expand=True)
+
+        self.savings_goal_tree = ttk.Treeview(list_frame, columns=("ID", "Hedef Adı", "Hedef Miktar", "Biriken Miktar",
+                                                                   "Kalan Miktar", "Hedef Tarihi", "Durum"),
+                                              show="headings")
+        self.savings_goal_tree.heading("ID", text="ID")
+        self.savings_goal_tree.heading("Hedef Adı", text="Hedef Adı")
+        self.savings_goal_tree.heading("Hedef Miktar", text="Hedef Miktar (₺)")
+        self.savings_goal_tree.heading("Biriken Miktar", text="Biriken Miktar (₺)")
+        self.savings_goal_tree.heading("Kalan Miktar", text="Kalan Miktar (₺)")
+        self.savings_goal_tree.heading("Hedef Tarihi", text="Hedef Tarihi")
+        self.savings_goal_tree.heading("Durum", text="Durum")
+
+        self.savings_goal_tree.column("ID", width=50, anchor="center")
+        self.savings_goal_tree.column("Hedef Adı", width=150, anchor="w")
+        self.savings_goal_tree.column("Hedef Miktar", width=100, anchor="e")
+        self.savings_goal_tree.column("Biriken Miktar", width=100, anchor="e")
+        self.savings_goal_tree.column("Kalan Miktar", width=100, anchor="e")
+        self.savings_goal_tree.column("Hedef Tarihi", width=100, anchor="center")
+        self.savings_goal_tree.column("Durum", width=100, anchor="center")
+
+        self.savings_goal_tree.pack(fill="both", expand=True)
+        self.savings_goal_tree.bind("<<TreeviewSelect>>", self.tasarruf_hedefi_liste_secildi)
+
+        goal_scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.savings_goal_tree.yview)
+        self.savings_goal_tree.configure(yscrollcommand=goal_scrollbar.set)
+        goal_scrollbar.pack(side="right", fill="y")
+
+        goal_action_buttons_bottom = ttk.Frame(list_frame)
+        goal_action_buttons_bottom.pack(pady=5)
+        ttk.Button(goal_action_buttons_bottom, text="Hedefi Sil", command=self.sil_tasarruf_hedefi).pack(side="left",
+                                                                                                         padx=5)
+        ttk.Button(goal_action_buttons_bottom, text="Miktar Ekle", command=self.miktar_ekle_tasarruf_hedefi).pack(
+            side="left", padx=5)
+        ttk.Button(goal_action_buttons_bottom, text="Durumu Güncelle",
+                   command=self.durum_guncelle_tasarruf_hedefi).pack(side="left", padx=5)
+
+    def kaydet_tasarruf_hedefi(self):
+        name = self.goal_name_entry.get().strip()
+        target_amount_str = self.goal_target_amount_entry.get()
+        current_amount_str = self.goal_current_amount_entry.get()
+        target_date = self.goal_target_date_entry.get()
+        description = self.goal_notes_text.get("1.0", tk.END).strip()
+
+        if not name or not target_amount_str or not target_date:
+            self.show_error("Hata", "Lütfen hedef adı, hedef miktar ve hedef tarihini girin.")
+            return
+
+        try:
+            target_amount = float(target_amount_str)
+            current_amount = float(current_amount_str)
+            if target_amount <= 0 or current_amount < 0:
+                self.show_error("Hata", "Hedef miktar pozitif, mevcut miktar sıfır veya pozitif olmalıdır.")
+                return
+            # Hedef tarihi geçmiş mi kontrolü (Opsiyonel, duruma göre esnetilebilir)
+            if datetime.strptime(target_date, '%Y-%m-%d').date() < datetime.now().date():
+                messagebox.showwarning("Uyarı", "Hedef tarihi geçmiş bir tarih olamaz. Gelecek bir tarih seçin.")
+                return
+        except ValueError:
+            self.show_error("Hata", "Miktar geçerli bir sayı olmalı, tarih formatıYYYY-MM-DD olmalıdır.")
+            return
+
+        # Hedef adı benzersiz mi kontrol et
+        existing_goals = self.db_manager.get_savings_goals(self.kullanici_id)
+        for goal in existing_goals:
+            if goal[1] == name:  # goal[1] hedefin adıdır
+                self.show_error("Hata", f"'{name}' adında bir tasarruf hedefi zaten mevcut.")
+                return
+
+        if self.db_manager.insert_savings_goal(name, target_amount, current_amount, target_date, description,
+                                               self.kullanici_id):
+            self.show_message("Başarılı", f"'{name}' tasarruf hedefi başarıyla eklendi.")
+            self.listele_tasarruf_hedefleri()
+            self.temizle_tasarruf_hedefi()
+        else:
+            self.show_error("Hata", "Tasarruf hedefi eklenirken bir sorun oluştu.")
+
+    def guncelle_tasarruf_hedefi(self):
+        if not self.selected_savings_goal_id:
+            self.show_warning("Uyarı", "Lütfen güncellemek için bir tasarruf hedefi seçin.")
+            return
+
+        name = self.goal_name_entry.get().strip()
+        target_amount_str = self.goal_target_amount_entry.get()
+        current_amount_str = self.goal_current_amount_entry.get()
+        target_date = self.goal_target_date_entry.get()
+        description = self.goal_notes_text.get("1.0", tk.END).strip()
+
+        if not name or not target_amount_str or not target_date:
+            self.show_error("Hata", "Lütfen hedef adı, hedef miktar ve hedef tarihini girin.")
+            return
+
+        try:
+            target_amount = float(target_amount_str)
+            current_amount = float(current_amount_str)
+            if target_amount <= 0 or current_amount < 0:
+                self.show_error("Hata", "Hedef miktar pozitif, mevcut miktar sıfır veya pozitif olmalıdır.")
+                return
+            if datetime.strptime(target_date, '%Y-%m-%d').date() < datetime.now().date():
+                messagebox.showwarning("Uyarı", "Hedef tarihi geçmiş bir tarih olamaz. Gelecek bir tarih seçin.")
+                return
+        except ValueError:
+            self.show_error("Hata", "Miktar geçerli bir sayı olmalı, tarih formatıYYYY-MM-DD olmalıdır.")
+            return
+
+        # Hedef adı benzersiz mi kontrol et (güncellenen hedef hariç)
+        existing_goals = self.db_manager.get_savings_goals(self.kullanici_id)
+        for goal in existing_goals:
+            if goal[0] != self.selected_savings_goal_id and goal[1] == name:
+                self.show_error("Hata", f"'{name}' adında başka bir tasarruf hedefi zaten mevcut.")
+                return
+
+        if self.db_manager.update_savings_goal(self.selected_savings_goal_id, name, target_amount, current_amount,
+                                               target_date, description, self.kullanici_id):
+            self.show_message("Başarılı", f"'{name}' tasarruf hedefi başarıyla güncellendi.")
+            self.listele_tasarruf_hedefleri()
+            self.temizle_tasarruf_hedefi()
+            self.selected_savings_goal_id = None
+        else:
+            self.show_error("Hata", "Tasarruf hedefi güncellenirken bir sorun oluştu.")
+
+    def sil_tasarruf_hedefi(self):
+        if not self.selected_savings_goal_id:
+            self.show_warning("Uyarı", "Lütfen silmek için bir tasarruf hedefi seçin.")
+            return
+
+        item_values = self.savings_goal_tree.item(self.selected_savings_goal_id, "values")
+        goal_name = item_values[1]
+
+        if messagebox.askyesno("Onay", f"Seçili tasarruf hedefini ('{goal_name}') silmek istediğinizden emin misiniz?"):
+            if self.db_manager.delete_savings_goal(self.selected_savings_goal_id, self.kullanici_id):
+                self.show_message("Başarılı", "Tasarruf hedefi başarıyla silindi.")
+                self.listele_tasarruf_hedefleri()
+                self.temizle_tasarruf_hedefi()
+                self.selected_savings_goal_id = None
+            else:
+                self.show_error("Hata", "Tasarruf hedefi silinirken bir sorun oluştu.")
+
+    def temizle_tasarruf_hedefi(self):
+        self.goal_name_entry.delete(0, tk.END)
+        self.goal_target_amount_entry.delete(0, tk.END)
+        self.goal_current_amount_entry.delete(0, tk.END)
+        self.goal_target_amount_entry.insert(0, "0.00")  # Varsayılan olarak 0
+        self.goal_current_amount_entry.insert(0, "0.00")  # Varsayılan olarak 0
+        self.goal_target_date_entry.set_date(datetime.now().strftime("%Y-%m-%d"))  # Varsayılan bugünün tarihi
+        self.goal_notes_text.delete("1.0", tk.END)
+        self.selected_savings_goal_id = None
+        self.savings_goal_tree.selection_remove(self.savings_goal_tree.selection())
+
+    def listele_tasarruf_hedefleri(self):
+        """Tasarruf hedeflerini veritabanından çeker ve Treeview'da listeler."""
+        for i in self.savings_goal_tree.get_children():
+            self.savings_goal_tree.delete(i)
+
+        goals = self.db_manager.get_savings_goals(self.kullanici_id)
+        for goal in goals:
+            # goal formatı: (id, name, target_amount, current_amount, target_date, description, status)
+            goal_id, name, target_amount, current_amount, target_date, description, status = goal
+
+            remaining_amount = target_amount - current_amount
+            if remaining_amount < 0:  # Eğer hedef aşıldıysa
+                remaining_amount = 0
+
+            # Durumu otomatik güncelle (sadece eğer zaten tamamlanmadıysa ve miktar hedefe ulaştıysa)
+            if current_amount >= target_amount and status != "Tamamlandı":
+                status = "Tamamlandı"
+                self.db_manager.update_savings_goal_status(goal_id, "Tamamlandı",
+                                                           self.kullanici_id)  # DB'yi de güncelle
+
+            self.savings_goal_tree.insert("", "end", values=(
+                goal_id, name, f"{target_amount:.2f}", f"{current_amount:.2f}", f"{remaining_amount:.2f}", target_date,
+                status
+            ))
+
+    def tasarruf_hedefi_liste_secildi(self, event):
+        """Tasarruf Hedefi Treeview'da bir satır seçildiğinde giriş alanlarını doldurur."""
+        selected_item = self.savings_goal_tree.focus()
+        if selected_item:
+            self.selected_savings_goal_id = self.savings_goal_tree.item(selected_item, "values")[0]
+            goal_detail = self.db_manager.get_savings_goal_by_id(self.selected_savings_goal_id, self.kullanici_id)
+
+            if goal_detail:
+                # goal_detail formatı: (id, name, target_amount, current_amount, target_date, description, status)
+                self.temizle_tasarruf_hedefi()  # Önce temizle
+
+                self.goal_name_entry.insert(0, goal_detail[1])
+                self.goal_target_amount_entry.insert(0, f"{goal_detail[2]:.2f}")
+                self.goal_current_amount_entry.insert(0, f"{goal_detail[3]:.2f}")
+                self.goal_target_date_entry.set_date(
+                    goal_detail[4])  # Tarih str olarak gelebilir, DateEntry otomatik dönüştürür
+                self.goal_notes_text.insert("1.0", goal_detail[5] or "")  # None ise boş string ekle
+        else:
+            self.temizle_tasarruf_hedefi()
+
+    def miktar_ekle_tasarruf_hedefi(self):
+        selected_item = self.savings_goal_tree.focus()
+        if not selected_item:
+            self.show_error("Hata", "Lütfen miktar eklenecek bir tasarruf hedefi seçin.")
+            return
+
+        goal_id = self.savings_goal_tree.item(selected_item, "values")[0]
+        goal_name = self.savings_goal_tree.item(selected_item, "values")[1]  # Sadece ismini al
+
+        goal_detail = self.db_manager.get_savings_goal_by_id(goal_id, self.kullanici_id)
+        if not goal_detail:
+            self.show_error("Hata", "Hedef detayları bulunamadı.")
+            return
+
+        current_status = goal_detail[6]
+        if current_status == "Tamamlandı" or current_status == "İptal Edildi":
+            self.show_error("Hata", f"Bu hedef ({current_status}) durumunda. Miktar ekleyemezsiniz.")
+            return
+
+        amount_to_add_str = simpledialog.askstring("Miktar Ekle",
+                                                   f"'{goal_name}' hedefine ne kadar miktar eklemek istersiniz?",
+                                                   parent=self.root)
+
+        if amount_to_add_str is None:  # Kullanıcı iptal etti
+            return
+
+        try:
+            amount_to_add = float(amount_to_add_str)
+            if amount_to_add <= 0:
+                self.show_error("Hata", "Eklenecek miktar pozitif bir sayı olmalıdır.")
+                return
+        except ValueError:
+            self.show_error("Hata", "Geçersiz miktar. Lütfen sayı girin.")
+            return
+
+        # goal_detail formatı: (id, name, target_amount, current_amount, target_date, description, status)
+        current_amount = goal_detail[3]
+        new_total_amount = current_amount + amount_to_add
+
+        if self.db_manager.update_savings_goal_current_amount(goal_id, new_total_amount, self.kullanici_id):
+            self.show_message("Başarılı", f"'{goal_name}' hedefine {amount_to_add:.2f} TL eklendi.")
+            self.listele_tasarruf_hedefleri()  # Listeyi güncelleyerek durum kontrolünü de tetikler
+        else:
+            self.show_error("Hata", "Tasarruf hedefine miktar eklenirken bir sorun oluştu.")
+
+    def durum_guncelle_tasarruf_hedefi(self):
+        selected_item = self.savings_goal_tree.focus()
+        if not selected_item:
+            self.show_error("Hata", "Lütfen durumu güncellenecek bir tasarruf hedefi seçin.")
+            return
+
+        goal_id = self.savings_goal_tree.item(selected_item, "values")[0]
+        goal_name = self.savings_goal_tree.item(selected_item, "values")[1]
+
+        new_status = simpledialog.askstring("Durum Güncelle",
+                                            f"'{goal_name}' hedefinin yeni durumunu girin (Devam Ediyor, Tamamlandı, İptal Edildi):",
+                                            parent=self.root)
+
+        if new_status is None:  # Kullanıcı iptal etti
+            return
+
+        valid_statuses = ["Devam Ediyor", "Tamamlandı", "İptal Edildi"]
+        if new_status not in valid_statuses:
+            self.show_error("Hata", "Geçersiz durum. Lütfen 'Devam Ediyor', 'Tamamlandı' veya 'İptal Edildi' girin.")
+            return
+
+        if self.db_manager.update_savings_goal_status(goal_id, new_status, self.kullanici_id):
+            self.show_message("Başarılı", f"'{goal_name}' hedefinin durumu '{new_status}' olarak güncellendi.")
+            self.listele_tasarruf_hedefleri()
+        else:
+            self.show_error("Hata", "Tasarruf hedefi durumu güncellenirken bir sorun oluştu.")
 

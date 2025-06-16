@@ -21,7 +21,7 @@ class DatabaseManager:
             print(f"Veritabanı bağlantısı '{self.db_name}' başarıyla kuruldu.")
         except sqlite3.Error as e:
             print(f"Veritabanı bağlantı hatası: {e}")
-            # Uygulamanın çökmesini engellemek için hata yönetimi eklenebilir.
+            raise ConnectionError(f"Veritabanı bağlantı hatası: {e}")  # Hata daha üst seviyeye fırlatıldı
 
     def _create_tables(self):
         """Uygulama için gerekli tabloları oluşturur (eğer yoksa)."""
@@ -121,7 +121,21 @@ class DatabaseManager:
             )
         """)
 
-        # Bu versiyonda savings_goals tablosu ve ilgili metotlar YOKTUR.
+        # YENİ EKLENEN: Tasarruf Hedefleri tablosu
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS savings_goals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                target_amount REAL NOT NULL,
+                current_amount REAL DEFAULT 0.0,
+                target_date TEXT, -- Hedeflenen tamamlama tarihi (YYYY-MM-DD)
+                description TEXT,
+                user_id INTEGER NOT NULL,
+                status TEXT DEFAULT 'Devam Ediyor', -- 'Devam Ediyor', 'Tamamlandı', 'İptal Edildi'
+                UNIQUE(name, user_id),
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        """)
 
         self.conn.commit()
         print("Veritabanı tabloları başarıyla oluşturuldu/kontrol edildi.")
@@ -182,9 +196,9 @@ class DatabaseManager:
         """Kullanıcının fatura veya teklif numarasını günceller."""
         try:
             if invoice_num is not None:
-                self.cursor.execute("UPDATE users SET invoice_num = ? WHERE id = ?", (invoice_num, user_id))
+                self.cursor.execute("UPDATE users SET invoice_num = ? WHERE id = ?, (invoice_num, user_id)")
             if offer_num is not None:
-                self.cursor.execute("UPDATE users SET offer_num = ? WHERE id = ?", (offer_num, user_id))
+                self.cursor.execute("UPDATE users SET offer_num = ? WHERE id = ?, (offer_num, user_id)")
             self.conn.commit()
             return True
         except sqlite3.Error as e:
@@ -486,4 +500,77 @@ class DatabaseManager:
         """, (user_id, start_date, end_date))
         return self.cursor.fetchall()
 
-# --- Tasarruf Hedefi Metotları bu versiyonda yer almaz. ---
+    # YENİ EKLENEN: Tasarruf Hedefi Metotları
+    def insert_savings_goal(self, name, target_amount, current_amount, target_date, description, user_id):
+        """Yeni bir tasarruf hedefi ekler."""
+        try:
+            self.cursor.execute("""
+                INSERT INTO savings_goals (name, target_amount, current_amount, target_date, description, user_id) 
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (name, target_amount, current_amount, target_date, description, user_id))
+            self.conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            print(f"Hata: Tasarruf hedefi adı '{name}' zaten mevcut.")
+            return False
+        except sqlite3.Error as e:
+            print(f"Tasarruf hedefi ekleme hatası: {e}")
+            return False
+
+    def get_savings_goals(self, user_id):
+        """Belirli bir kullanıcıya ait tüm tasarruf hedeflerini getirir."""
+        self.cursor.execute("""
+            SELECT id, name, target_amount, current_amount, target_date, description, status 
+            FROM savings_goals 
+            WHERE user_id = ?
+            ORDER BY status ASC, target_date ASC
+        """, (user_id,))
+        return self.cursor.fetchall()
+
+    def update_savings_goal_current_amount(self, goal_id, new_current_amount, user_id):
+        """Bir tasarruf hedefinin mevcut birikmiş miktarını günceller."""
+        try:
+            self.cursor.execute("""
+                UPDATE savings_goals 
+                SET current_amount = ? 
+                WHERE id = ? AND user_id = ?
+            """, (new_current_amount, goal_id, user_id))
+            self.conn.commit()
+            return True
+        except sqlite3.Error as e:
+            print(f"Tasarruf hedefi miktar güncelleme hatası: {e}")
+            return False
+
+    def update_savings_goal_status(self, goal_id, new_status, user_id):
+        """Bir tasarruf hedefinin durumunu günceller."""
+        try:
+            self.cursor.execute("""
+                UPDATE savings_goals 
+                SET status = ? 
+                WHERE id = ? AND user_id = ?
+            """, (new_status, goal_id, user_id))
+            self.conn.commit()
+            return True
+        except sqlite3.Error as e:
+            print(f"Tasarruf hedefi durum güncelleme hatası: {e}")
+            return False
+
+    def delete_savings_goal(self, goal_id, user_id):
+        """Bir tasarruf hedefini siler."""
+        try:
+            self.cursor.execute("DELETE FROM savings_goals WHERE id = ? AND user_id = ?", (goal_id, user_id))
+            self.conn.commit()
+            return True
+        except sqlite3.Error as e:
+            print(f"Tasarruf hedefi silme hatası: {e}")
+            return False
+
+    def get_savings_goal_by_id(self, goal_id, user_id):
+        """ID'ye göre tek bir tasarruf hedefi getirir."""
+        self.cursor.execute("""
+            SELECT id, name, target_amount, current_amount, target_date, description, status 
+            FROM savings_goals 
+            WHERE id = ? AND user_id = ?
+        """, (goal_id, user_id))
+        return self.cursor.fetchone()
+

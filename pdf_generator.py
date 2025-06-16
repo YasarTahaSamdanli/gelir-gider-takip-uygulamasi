@@ -1,322 +1,347 @@
 # pdf_generator.py
-import pandas as pd
-from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import cm
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
-from reportlab.lib import colors
+from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
+from reportlab.lib.colors import HexColor
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-import json
 import os
-import sys
 from datetime import datetime
+import json  # Fatura/Teklif kalemlerini JSON'dan okumak için
 
-# --- Global Font Tanımlamaları ---
-# Bu değişken main.py tarafından doldurulacak.
-GLOBAL_FONT_PATH_FOR_PDF = None
-GLOBAL_REPORTLAB_FONT_NAME = "Arial"  # ReportLab'da kullanacağımız font adı
+# Global font adı (main.py'den veya başka yerden erişilebilir olmalı)
+GLOBAL_REPORTLAB_FONT_NAME = "ArialCustom"
 
 
+# Fontu ReportLab'a kaydetme fonksiyonu
 def _register_pdf_font(font_path):
-    """ReportLab'a fontu kaydeder."""
-    global GLOBAL_REPORTLAB_FONT_NAME
+    """
+    ReportLab için özel bir TrueType fontunu kaydeder.
+    Uygulama başlatılırken main.py veya ilgili modül tarafından çağrılmalıdır.
+    """
+    if not os.path.exists(font_path):
+        print(f"Uyarı: Font dosyası bulunamadı: {font_path}. ReportLab'ın varsayılan fontları kullanılacak.")
+        return
+
     try:
-        if os.path.exists(font_path):
-            if not pdfmetrics.isFontRegistered(GLOBAL_REPORTLAB_FONT_NAME):
-                pdfmetrics.registerFont(TTFont(GLOBAL_REPORTLAB_FONT_NAME, font_path))
-                pdfmetrics.registerFont(TTFont(GLOBAL_REPORTLAB_FONT_NAME + "-Bold", font_path))
-                pdfmetrics.registerFontFamily(GLOBAL_REPORTLAB_FONT_NAME,
-                                              normal=GLOBAL_REPORTLAB_FONT_NAME,
-                                              bold=GLOBAL_REPORTLAB_FONT_NAME + "-Bold",
-                                              italic=GLOBAL_REPORTLAB_FONT_NAME,
-                                              boldItalic=GLOBAL_REPORTLAB_FONT_NAME + "-Bold")
-                print(f"Font '{GLOBAL_REPORTLAB_FONT_NAME}' başarıyla yüklendi: {font_path}")
-        else:
-            print(f"Uyarı: Font dosyası bulunamadı: {font_path}. PDF'de Türkçe karakter sorunları olabilir.")
-            GLOBAL_REPORTLAB_FONT_NAME = "Helvetica"  # Fallback font
+        pdfmetrics.registerFont(TTFont(GLOBAL_REPORTLAB_FONT_NAME, font_path))
+        print(f"Font '{GLOBAL_REPORTLAB_FONT_NAME}' başarıyla kaydedildi: {font_path}")
     except Exception as e:
-        print(f"Hata: ReportLab'a font yüklenirken bir sorun oluştu: {e}. PDF'de Türkçe karakter sorunları olabilir.")
-        GLOBAL_REPORTLAB_FONT_NAME = "Helvetica"  # Fallback font
+        print(f"Hata: ReportLab'a font yüklenirken bir sorun oluştu: {e}")
+        print("PDF'de Türkçe karakter sorunları yaşanabilir. Lütfen font dosyasının geçerli olduğundan emin olun.")
 
 
 class PDFGenerator:
-    def __init__(self, font_name=GLOBAL_REPORTLAB_FONT_NAME):
-        """
-        PDF oluşturma yardımcı sınıfı.
-        Args:
-            font_name (str): PDF'lerde kullanılacak font adı (ReportLab tarafından kayıtlı olmalı).
-        """
+    def __init__(self, db_manager, user_id, font_name=GLOBAL_REPORTLAB_FONT_NAME):
         self.font_name = font_name
+        self.db_manager = db_manager
+        self.user_id = user_id
         self.styles = getSampleStyleSheet()
         self._setup_styles()
 
     def _setup_styles(self):
-        """PDF metin stillerini ayarlar."""
-        self.title_style = ParagraphStyle(
-            'TitleStyle',
-            parent=self.styles['h1'],
-            fontName=self.font_name,
-            fontSize=20,
-            spaceAfter=14,
-            alignment=TA_CENTER
-        )
-        self.heading_style = ParagraphStyle(
-            'HeadingStyle',
-            parent=self.styles['h2'],
-            fontName=self.font_name,
-            fontSize=14,
-            spaceAfter=10,
-            alignment=TA_CENTER
-        )
-        self.sub_heading_style = ParagraphStyle(
-            'SubHeadingStyle',
-            parent=self.styles['h3'],
-            fontName=self.font_name,
-            fontSize=12,
-            spaceAfter=8,
-            alignment=TA_LEFT
-        )
-        self.normal_style = ParagraphStyle(
-            'NormalStyle',
-            parent=self.styles['Normal'],
-            fontName=self.font_name,
-            fontSize=10,
-            leading=12
-        )
-        self.bold_style = ParagraphStyle(
-            'BoldStyle',
-            parent=self.normal_style,
-            fontName=self.font_name + '-Bold' if self.font_name != "Helvetica" else "Helvetica-Bold",
-            fontSize=10,
-            leading=12,
-        )
+        """PDF için özel stilleri ayarlar."""
+        # 'Title' stilini doğrudan SampleStyleSheet'ten alıp güncelliyoruz
+        if 'Title' not in self.styles:
+            self.styles.add(ParagraphStyle(name='Title',
+                                           parent=self.styles['h1'],
+                                           fontName=self.font_name,
+                                           fontSize=20,
+                                           leading=24,
+                                           alignment=TA_CENTER,
+                                           spaceAfter=20))
+        else:
+            title_style = self.styles['Title']
+            title_style.fontName = self.font_name
+            title_style.fontSize = 20
+            title_style.leading = 24
+            title_style.alignment = TA_CENTER
+            title_style.spaceAfter = 20
 
-    def generate_excel_report(self, data, file_path):
+        # 'Heading1' stilini doğrudan SampleStyleSheet'ten alıp güncelliyoruz
+        if 'Heading1' not in self.styles:
+            self.styles.add(ParagraphStyle(name='Heading1',
+                                           parent=self.styles['h2'],
+                                           fontName=self.font_name,
+                                           fontSize=14,
+                                           leading=18,
+                                           alignment=TA_LEFT,
+                                           spaceBefore=12,
+                                           spaceAfter=6,
+                                           textColor=HexColor('#0056b3')))
+        else:
+            heading1_style = self.styles['Heading1']
+            heading1_style.fontName = self.font_name
+            heading1_style.fontSize = 14
+            heading1_style.leading = 18
+            heading1_style.alignment = TA_LEFT
+            heading1_style.spaceBefore = 12
+            heading1_style.spaceAfter = 6
+            heading1_style.textColor = HexColor('#0056b3')
+
+        # 'BodyText' stilini doğrudan SampleStyleSheet'ten alıp güncelliyoruz
+        if 'BodyText' not in self.styles:  # Bu kontrol eklendi
+            self.styles.add(ParagraphStyle(name='BodyText',
+                                           parent=self.styles['Normal'],
+                                           fontName=self.font_name,
+                                           fontSize=10,
+                                           leading=12,
+                                           alignment=TA_LEFT,
+                                           spaceAfter=6))
+        else:  # Eğer varsa özelliklerini güncelle
+            bodytext_style = self.styles['BodyText']
+            bodytext_style.fontName = self.font_name
+            bodytext_style.fontSize = 10
+            bodytext_style.leading = 12
+            bodytext_style.alignment = TA_LEFT
+            bodytext_style.spaceAfter = 6
+
+        self.styles.add(ParagraphStyle(name='TableHeader',
+                                       parent=self.styles['Normal'],
+                                       fontName=self.font_name,
+                                       fontSize=9,
+                                       leading=11,
+                                       alignment=TA_CENTER,
+                                       textColor=HexColor('#ffffff'),
+                                       backColor=HexColor('#4CAF50')))  # Yeşil başlık
+        self.styles.add(ParagraphStyle(name='TableBody',
+                                       parent=self.styles['Normal'],
+                                       fontName=self.font_name,
+                                       fontSize=9,
+                                       leading=11,
+                                       alignment=TA_LEFT))
+        self.styles.add(ParagraphStyle(name='Totals',
+                                       parent=self.styles['Normal'],
+                                       fontName=self.font_name,
+                                       fontSize=11,
+                                       leading=14,
+                                       alignment=TA_RIGHT,
+                                       spaceBefore=10,
+                                       textColor=HexColor('#333333')))
+        self.styles.add(ParagraphStyle(name='GrandTotal',
+                                       parent=self.styles['Normal'],
+                                       fontName=self.font_name,
+                                       fontSize=14,
+                                       leading=16,
+                                       alignment=TA_RIGHT,
+                                       spaceBefore=10,
+                                       textColor=HexColor('#0056b3'),
+                                       backColor=HexColor('#e6f2ff'),
+                                       borderPadding=(5, 5, 5, 5)))
+        self.styles.add(ParagraphStyle(name='SmallText',
+                                       parent=self.styles['Normal'],
+                                       fontName=self.font_name,
+                                       fontSize=8,
+                                       leading=9,
+                                       alignment=TA_LEFT,
+                                       textColor=HexColor('#666666')))
+
+    def generate_general_report_pdf(self, report_data, filename="genel_rapor.pdf"):
         """
-        Verilen veriden bir Excel raporu oluşturur ve belirtilen yola kaydeder.
-        Args:
-            data (list): İşlem verilerini içeren liste.
-            file_path (str): Raporun kaydedileceği dosya yolu.
+        Genel gelir-gider raporunu PDF olarak oluşturur.
+        report_data: Sözlük formatında rapor verisi.
+        Örnek report_data yapısı:
+        {
+            "title": "Başlık",
+            "sections": [
+                {"heading": "Bölüm 1 Başlığı", "data": [["Kolon1", "Kolon2"], ["veri1", "veri2"]]},
+                {"heading": "Bölüm 2 Başlığı", "data": [["KolonA", "KolonB"], ["veriA", "veriB"]]}
+            ]
+        }
         """
-        if not data:
-            raise ValueError("Excel raporu oluşturulacak veri bulunamadı.")
+        doc = SimpleDocTemplate(filename, pagesize=A4, rightMargin=cm, leftMargin=cm, topMargin=cm, bottomMargin=cm)
+        story = []
 
-        df = pd.DataFrame(data, columns=["ID", "Tür", "Miktar", "Kategori", "Açıklama", "Tarih"])
-        df.to_excel(file_path, index=False)
+        # Başlık
+        story.append(Paragraph(report_data.get("title", "Genel Rapor"), self.styles['Title']))
+        story.append(Spacer(1, 0.5 * cm))
 
-    def generate_pdf_report(self, data, file_path, username, filter_info):
-        """
-        Verilen veriden bir PDF raporu oluşturur ve belirtilen yola kaydeder.
-        Args:
-            data (list): İşlem verilerini içeren liste.
-            file_path (str): Raporun kaydedileceği dosya yolu.
-            username (str): Raporu oluşturan kullanıcının adı.
-            filter_info (dict): Rapor filtreleme bilgilerini içeren sözlük (örn. tür, kategori, tarih aralığı).
-        """
-        if not data:
-            raise ValueError("PDF raporu oluşturulacak veri bulunamadı.")
+        for section in report_data.get("sections", []):
+            story.append(Paragraph(section.get("heading", ""), self.styles['Heading1']))
+            story.append(Spacer(1, 0.2 * cm))
 
-        doc = SimpleDocTemplate(file_path, pagesize=letter)
-        elements = []
+            data = section.get("data", [])
+            if data:
+                # Tablo oluştur
+                table_data = []
+                # Başlık satırı
+                header_row = [Paragraph(col, self.styles['TableHeader']) for col in data[0]]
+                table_data.append(header_row)
 
-        elements.append(Paragraph("Gelir-Gider Uygulaması Raporu", self.title_style))
-        elements.append(Spacer(1, 0.2 * 10 * 6))
+                # Veri satırları
+                for row_data in data[1:]:
+                    table_data.append([Paragraph(str(item), self.styles['TableBody']) for item in row_data])
 
-        filtre_bilgisi = f"<b>Rapor Tarihi:</b> {datetime.now().strftime('%Y-%m-%d %H:%M')}<br/>" \
-                         f"<b>Kullanıcı:</b> {username}<br/>" \
-                         f"<b>Filtreler:</b> Tür: {filter_info['tur']}, Kategori: {filter_info['kategori']}<br/>" \
-                         f"Tarih Aralığı: {filter_info['bas_tarih']} - {filter_info['bit_tarih']}<br/>" \
-                         f"Arama Terimi: {filter_info['arama_terimi'] or 'Yok'}"
-        elements.append(Paragraph(filtre_bilgisi, self.normal_style))
-        elements.append(Spacer(1, 0.2 * 10 * 6))
-
-        table_data = [["ID", "Tür", "Miktar (₺)", "Kategori", "Açıklama", "Tarih"]]
-        total_gelir = 0
-        total_gider = 0
-
-        for row in data:
-            table_data.append([
-                Paragraph(str(row[0]), self.normal_style),
-                Paragraph(row[1], self.normal_style),
-                Paragraph(f"{row[2]:,.2f}".replace(".", ","), self.normal_style),
-                Paragraph(row[3] if row[3] else '', self.normal_style),
-                Paragraph(row[4] if row[4] else '', self.normal_style),
-                Paragraph(row[5], self.normal_style)
-            ])
-            if row[1] == "Gelir":
-                total_gelir += row[2]
+                table = Table(table_data, colWidths=[doc.width / len(data[0])] * len(data[0]))
+                table.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), HexColor('#4CAF50')),  # Başlık satırı yeşil
+                    ('TEXTCOLOR', (0, 0), (-1, 0), HexColor('#ffffff')),
+                    ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                    ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                    ('FONTNAME', (0, 0), (-1, 0), self.font_name),
+                    ('FONTSIZE', (0, 0), (-1, 0), 9),
+                    ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
+                    ('BACKGROUND', (0, 1), (-1, -1), HexColor('#f5f5f5')),  # Veri satırları açık gri
+                    ('GRID', (0, 0), (-1, -1), 0.5, HexColor('#cccccc')),  # Izgara çizgileri
+                    ('BOX', (0, 0), (-1, -1), 1, HexColor('#cccccc')),
+                    ('LEFTPADDING', (0, 0), (-1, -1), 6),
+                    ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+                    ('TOPPADDING', (0, 0), (-1, -1), 4),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+                ]))
+                story.append(table)
+                story.append(Spacer(1, 0.5 * cm))
             else:
-                total_gider += row[2]
+                story.append(Paragraph("Gösterilecek veri bulunamadı.", self.styles['BodyText']))
+                story.append(Spacer(1, 0.5 * cm))
 
-        table_style = TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#D0D0D0")),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
-            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('FONTNAME', (0, 0), (-1, 0), self.font_name),
-            ('FONTSIZE', (0, 0), (-1, 0), 10),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-            ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor("#F5F5F5")),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-            ('LEFTPADDING', (0, 0), (-1, -1), 4),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 4),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-            ('TOPPADDING', (0, 0), (-1, -1), 4),
-            ('FONTNAME', (0, 1), (-1, -1), self.font_name),
-            ('FONTSIZE', (0, 1), (-1, -1), 9),
-            ('ALIGN', (2, 0), (2, -1), 'RIGHT'),
-        ])
+        # PDF'i oluştur
+        try:
+            doc.build(story)
+            return os.path.abspath(filename)
+        except Exception as e:
+            raise Exception(f"PDF oluşturma hatası: {e}")
 
-        col_widths = [0.05 * letter[0], 0.08 * letter[0], 0.12 * letter[0], 0.15 * letter[0], 0.45 * letter[0],
-                      0.15 * letter[0]]
-
-        table_style.add('ALIGN', (2, 0), (2, -1), 'RIGHT')
-
-        table = Table(table_data, colWidths=col_widths)
-        table.setStyle(table_style)
-        elements.append(table)
-        elements.append(Spacer(1, 0.2 * 10 * 6))
-
-        elements.append(
-            Paragraph(f"<b>Toplam Gelir:</b> <font color='green'>₺{total_gelir:,.2f}</font>", self.normal_style))
-        elements.append(
-            Paragraph(f"<b>Toplam Gider:</b> <font color='red'>₺{total_gider:,.2f}</font>", self.normal_style))
-        elements.append(
-            Paragraph(f"<b>Bakiye:</b> <font color='blue'>₺{total_gelir - total_gider:,.2f}</font>", self.normal_style))
-
-        doc.build(elements)
-
-    def generate_invoice_offer_pdf(self, invoice_data, customer_info, file_path):
+    def generate_document_pdf(self, doc_detail):
         """
-        Fatura veya teklif için PDF belgesi oluşturur.
-        Args:
-            invoice_data (tuple): Fatura/teklif verisi (DB'den çekilen tüm 12 sütun).
-            customer_info (tuple): Müşteri bilgileri (adres, telefon, email).
-            file_path (str): PDF'in kaydedileceği yol.
+        Fatura veya Teklif belgesini PDF olarak oluşturur.
+        doc_detail: Veritabanından çekilen fatura/teklif detayları.
+        (id, type, document_number, customer_name, document_date, due_validity_date, items_json, total_amount_excluding_kdv, total_kdv_amount, notes, status, user_id)
         """
-        if not invoice_data:
-            raise ValueError("Fatura/Teklif verisi bulunamadı.")
+        doc_type = doc_detail[1]  # 'Fatura' veya 'Teklif'
+        document_number = doc_detail[2]
+        customer_name = doc_detail[3]
+        document_date = doc_detail[4]
+        due_validity_date = doc_detail[5]
+        items_json = doc_detail[6]
+        total_excl_kdv = doc_detail[7]
+        total_kdv = doc_detail[8]
+        notes = doc_detail[9]
+        status = doc_detail[10]
+        user_id = doc_detail[11]
 
-        # Burası güncellendi: Artık database_manager'dan 12 değer bekliyoruz.
-        (id, tur, belge_numarasi, musteri_adi, belge_tarihi_str, son_odeme_gecerlilik_tarihi_str, urun_hizmetler_json,
-         toplam_tutar_kdv_haric, toplam_kdv, notlar, durum, kullanici_id) = invoice_data
-        genel_toplam = toplam_tutar_kdv_haric + toplam_kdv
+        # Müşteri bilgilerini al
+        customer_info = self.db_manager.get_customer_by_name(customer_name, user_id)  # Kendi kullanıcısına ait müşteri
+        customer_address = customer_info[2] if customer_info else "Belirtilmemiş"
+        customer_phone = customer_info[3] if customer_info else "Belirtilmemiş"
+        customer_email = customer_info[4] if customer_info else "Belirtilmemiş"
 
-        musteri_adres = customer_info[0] if customer_info and len(customer_info) > 0 else "Belirtilmemiş"
-        musteri_telefon = customer_info[1] if customer_info and len(customer_info) > 1 else "Belirtilmemiş"
-        musteri_email = customer_info[2] if customer_info and len(customer_info) > 2 else "Belirtilmemiş"
+        filename = f"{document_number}_{doc_type}.pdf"
+        doc = SimpleDocTemplate(filename, pagesize=A4, rightMargin=1.5 * cm, leftMargin=1.5 * cm, topMargin=1.5 * cm,
+                                bottomMargin=1.5 * cm)
+        story = []
 
-        doc = SimpleDocTemplate(file_path, pagesize=letter)
-        elements = []
+        # Başlık
+        story.append(Paragraph(f"{doc_type.upper()}", self.styles['Title']))
+        story.append(Spacer(1, 0.5 * cm))
 
-        elements.append(Paragraph(f"{tur} / Teklif Belgesi", self.heading_style))
-        elements.append(Spacer(1, 0.2 * 10 * 6))
-
-        # 2. Şirket Bilgileri (Sabit Metin)
-        elements.append(Paragraph("<b>Şirket Adı:</b> ABC Finansal Hizmetler", self.normal_style))
-        elements.append(
-            Paragraph("<b>Adres:</b> Örnek Mahallesi, Deneme Caddesi No: 123, Şehir, Ülke", self.normal_style))
-        elements.append(Paragraph("<b>Telefon:</b> +90 5XX XXX XX XX", self.normal_style))
-        elements.append(Paragraph("<b>E-posta:</b> info@abcfınans.com", self.normal_style))
-        elements.append(Spacer(1, 0.2 * 10 * 6))
-
-        # 3. Belge Bilgileri ve Müşteri Bilgileri
-        belge_bilgi_data = [
-            [Paragraph(f"<b>{tur} No:</b> {belge_numarasi}", self.bold_style),
-             Paragraph(f"<b>Müşteri Adı:</b> {musteri_adi}", self.bold_style)],
-            [Paragraph(f"<b>Belge Tarihi:</b> {belge_tarihi_str}", self.normal_style),
-             Paragraph(f"<b>Adres:</b> {musteri_adres}", self.normal_style)],
-            [Paragraph(
-                f"<b>{'Son Ödeme Tarihi' if tur == 'Fatura' else 'Geçerlilik Tarihi'}:</b> {son_odeme_gecerlilik_tarihi_str}",
-                self.normal_style), Paragraph(f"<b>Telefon:</b> {musteri_telefon}", self.normal_style)],
-            [Paragraph(f"<b>Durum:</b> {durum}", self.normal_style),
-             Paragraph(f"<b>E-posta:</b> {musteri_email}", self.normal_style)],
+        # Belge ve Müşteri Bilgileri
+        info_data = [
+            [Paragraph("Belge Numarası:", self.styles['BodyText']),
+             Paragraph(document_number, self.styles['BodyText'])],
+            [Paragraph("Belge Tarihi:", self.styles['BodyText']), Paragraph(document_date, self.styles['BodyText'])],
+            [Paragraph(f"{doc_type} Durumu:", self.styles['BodyText']), Paragraph(status, self.styles['BodyText'])],
+            [Paragraph(f"{'Vade Tarihi:' if doc_type == 'Fatura' else 'Geçerlilik Tarihi:'}", self.styles['BodyText']),
+             Paragraph(due_validity_date, self.styles['BodyText'])]
         ]
 
-        belge_bilgi_table = Table(belge_bilgi_data, colWidths=[letter[0] / 2, letter[0] / 2])
-        belge_bilgi_table.setStyle(TableStyle([
-            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-            ('LEFTPADDING', (0, 0), (-1, -1), 0),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-            ('TOPPADDING', (0, 0), (-1, -1), 0),
-        ]))
-        elements.append(belge_bilgi_table)
-        elements.append(Spacer(1, 0.2 * 10 * 6))
+        customer_data = [
+            [Paragraph("Müşteri Adı:", self.styles['BodyText']), Paragraph(customer_name, self.styles['BodyText'])],
+            [Paragraph("Adres:", self.styles['BodyText']), Paragraph(customer_address, self.styles['BodyText'])],
+            [Paragraph("Telefon:", self.styles['BodyText']), Paragraph(customer_phone, self.styles['BodyText'])],
+            [Paragraph("E-posta:", self.styles['BodyText']), Paragraph(customer_email, self.styles['BodyText'])]
+        ]
 
-        # 4. Ürün/Hizmet Tablosu
-        elements.append(Paragraph("<b>Ürünler / Hizmetler</b>", self.sub_heading_style))
-        elements.append(Spacer(1, 0.1 * 10 * 6))
-
-        urun_hizmetler_data = [
+        # Tabloları yan yana koymak için
+        header_table_data = [
             [
-                Paragraph("<b>Açıklama</b>", self.bold_style),
-                Paragraph("<b>Miktar</b>", self.bold_style),
-                Paragraph("<b>Birim Fiyat (₺)</b>", self.bold_style),
-                Paragraph("<b>KDV (%)</b>", self.bold_style),
-                Paragraph("<b>KDV Tutarı (₺)</b>", self.bold_style),
-                Paragraph("<b>Ara Toplam (₺)</b>", self.bold_style)
+                Table(info_data, colWidths=[4 * cm, 6 * cm], style=TableStyle([
+                    ('LEFTPADDING', (0, 0), (-1, -1), 0), ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+                    ('TOPPADDING', (0, 0), (-1, -1), 2), ('BOTTOMPADDING', (0, 0), (-1, -1), 2)
+                ])),
+                Table(customer_data, colWidths=[4 * cm, 6 * cm], style=TableStyle([
+                    ('LEFTPADDING', (0, 0), (-1, -1), 0), ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+                    ('TOPPADDING', (0, 0), (-1, -1), 2), ('BOTTOMPADDING', (0, 0), (-1, -1), 2)
+                ]))
+            ]
+        ]
+        story.append(Table(header_table_data, colWidths=[doc.width / 2, doc.width / 2]))
+        story.append(Spacer(1, 0.5 * cm))
+
+        # Kalemler Tablosu
+        story.append(Paragraph("Kalemler", self.styles['Heading1']))
+        story.append(Spacer(1, 0.2 * cm))
+
+        items = json.loads(items_json)
+        table_data = [
+            [
+                Paragraph("Ürün/Hizmet", self.styles['TableHeader']),
+                Paragraph("Miktar", self.styles['TableHeader']),
+                Paragraph("Birim Fiyat (₺)", self.styles['TableHeader']),
+                Paragraph("KDV %", self.styles['TableHeader']),
+                Paragraph("KDV Miktar (₺)", self.styles['TableHeader']),
+                Paragraph("Ara Toplam (₺)", self.styles['TableHeader'])
             ]
         ]
 
-        parsed_items = json.loads(urun_hizmetler_json)
-        for item in parsed_items:
-            urun_hizmetler_data.append([
-                Paragraph(item.get('ad', ''), self.normal_style),
-                Paragraph(f"{item.get('miktar', 0):g}".replace(".", ","), self.normal_style),
-                Paragraph(f"{item.get('birim_fiyat', 0):,.2f}".replace(".", ","), self.normal_style),
-                Paragraph(f"{item.get('kdv_orani', 0):g}".replace(".", ","), self.normal_style),
-                Paragraph(f"{item.get('kdv_miktari', 0):,.2f}".replace(".", ","), self.normal_style),
-                Paragraph(f"{item.get('ara_toplam', 0):,.2f}".replace(".", ","), self.normal_style)
+        for item in items:
+            table_data.append([
+                Paragraph(item.get("ad", ""), self.styles['TableBody']),
+                Paragraph(str(item.get("miktar", "")), self.styles['TableBody']),
+                Paragraph(f"{item.get('birim_fiyat', 0):.2f}", self.styles['TableBody']),
+                Paragraph(f"{item.get('kdv_orani', 0):.2f}", self.styles['TableBody']),
+                Paragraph(f"{item.get('kdv_miktari', 0):.2f}", self.styles['TableBody']),
+                Paragraph(f"{item.get('ara_toplam', 0):.2f}", self.styles['TableBody'])
             ])
 
-        urun_hizmet_table_style = TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#D0D0D0")),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+        # Kolon genişlikleri orantılı olarak ayarlanabilir
+        col_widths = [2.5 * cm, 1.5 * cm, 2 * cm, 1.5 * cm, 2 * cm, 2.5 * cm]
+        # Toplam belge genişliğine göre yeniden hesapla
+        total_col_width = sum(col_widths)
+        col_widths_normalized = [w * (doc.width / total_col_width) for w in col_widths]
+
+        item_table = Table(table_data, colWidths=col_widths_normalized)
+        item_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), HexColor('#4CAF50')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), HexColor('#ffffff')),
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
             ('FONTNAME', (0, 0), (-1, 0), self.font_name),
-            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('FONTSIZE', (0, 0), (-1, 0), 9),
             ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-            ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor("#F5F5F5")),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('BACKGROUND', (0, 1), (-1, -1), HexColor('#f5f5f5')),
+            ('GRID', (0, 0), (-1, -1), 0.5, HexColor('#cccccc')),
+            ('BOX', (0, 0), (-1, -1), 1, HexColor('#cccccc')),
+            ('ALIGN', (1, 1), (1, -1), 'CENTER'),  # Miktar sütunu ortala
+            ('ALIGN', (2, 1), (-1, -1), 'RIGHT'),  # Fiyat, KDV sütunlarını sağa hizala
             ('LEFTPADDING', (0, 0), (-1, -1), 4),
             ('RIGHTPADDING', (0, 0), (-1, -1), 4),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
-            ('TOPPADDING', (0, 0), (-1, -1), 4),
-            ('FONTNAME', (0, 1), (-1, -1), self.font_name),
-            ('FONTSIZE', (0, 1), (-1, -1), 9),
-            ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
-            ('ALIGN', (2, 0), (5, -1), 'RIGHT'),
-        ])
+            ('TOPPADDING', (0, 0), (-1, -1), 3),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ]))
+        story.append(item_table)
+        story.append(Spacer(1, 0.5 * cm))
 
-        col_widths_urun = [0.28 * letter[0], 0.1 * letter[0], 0.15 * letter[0], 0.1 * letter[0], 0.12 * letter[0],
-                           0.15 * letter[0]]
+        # Toplamlar
+        story.append(Paragraph(f"KDV Hariç Toplam: {total_excl_kdv:.2f} TL", self.styles['Totals']))
+        story.append(Paragraph(f"Toplam KDV: {total_kdv:.2f} TL", self.styles['Totals']))
+        story.append(Paragraph(f"GENEL TOPLAM: {total_excl_kdv + total_kdv:.2f} TL", self.styles['GrandTotal']))
+        story.append(Spacer(1, 0.5 * cm))
 
-        urun_hizmet_table = Table(urun_hizmetler_data, colWidths=col_widths_urun)
-        urun_hizmet_table.setStyle(urun_hizmet_table_style)
-        elements.append(urun_hizmet_table)
-        elements.append(Spacer(1, 0.2 * 10 * 6))
+        # Notlar
+        if notes:
+            story.append(Paragraph("Notlar:", self.styles['Heading1']))
+            story.append(Paragraph(notes, self.styles['BodyText']))
+            story.append(Spacer(1, 0.5 * cm))
 
-        # 5. Toplam Tutarlar
-        elements.append(Paragraph(
-            f"<b>Toplam (KDV Hariç):</b> <font color='blue'>₺{toplam_tutar_kdv_haric:,.2f}".replace(".",
-                                                                                                    ",") + "</font>",
-            self.bold_style))
-        elements.append(
-            Paragraph(f"<b>Toplam KDV:</b> <font color='orange'>₺{toplam_kdv:,.2f}".replace(".", ",") + "</font>",
-                      self.bold_style))
-        elements.append(
-            Paragraph(f"<b>Genel Toplam:</b> <font color='green'>₺{genel_toplam:,.2f}".replace(".", ",") + "</font>",
-                      self.bold_style))
-        elements.append(Spacer(1, 0.2 * 10 * 6))
+        story.append(
+            Paragraph(f"Oluşturulma Tarihi: {datetime.now().strftime('%Y-%m-%d %H:%M')}", self.styles['SmallText']))
 
-        # 6. Notlar
-        if notlar:
-            elements.append(Paragraph("<b>Notlar:</b>", self.sub_heading_style))
-            elements.append(Paragraph(notlar, self.normal_style))
-
-        doc.build(elements)
+        try:
+            doc.build(story)
+            return os.path.abspath(filename)
+        except Exception as e:
+            raise Exception(f"PDF oluşturma hatası: {e}")
 

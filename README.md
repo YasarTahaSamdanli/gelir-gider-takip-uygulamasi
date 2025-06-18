@@ -22,6 +22,7 @@ Bu uygulama, kullanıcıların gelir ve giderlerini kolayca takip etmelerini, ka
 
 ### 🗂️ Kategori Yönetimi
 - Gelir ve gider kategorileri oluşturma, düzenleme ve silme
+- Yapay zeka ile açıklamalarından yola çıkarak Kategori ekleme :D .
 
 ### 📊 Gelişmiş Raporlama ve Görselleştirme
 - Kategori bazında pasta grafikleri ile gelir-gider dağılımı

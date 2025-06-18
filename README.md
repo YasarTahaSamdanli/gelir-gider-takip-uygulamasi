@@ -1,4 +1,4 @@
-# Gelir Gider Takip Uygulaması
+# FİNGO
 
 Bu uygulama, kullanıcıların gelir ve giderlerini kolayca takip etmelerini, kategorize etmelerini, tekrarlayan işlemleri otomatikleştirmelerini ve mali durumlarını görsel raporlarla analiz etmelerini sağlayan gelişmiş bir finans takip aracıdır.
 

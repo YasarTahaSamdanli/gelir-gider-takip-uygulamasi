@@ -43,6 +43,20 @@ Bu uygulama, kullanıcıların gelir ve giderlerini kolayca takip etmelerini, ka
 ### 📑 Vergi Raporları (KDV Odaklı)
 - Belirli tarih aralıklarında toplam satış KDV’si hesaplama
 - KDV oranlarına göre detaylı dağılım
+  
+### 💬 Kişisel Finans Koçu (Chatbot) (DAHA YAPILMADI)
+- Kullanıcının finansal sorularını yanıtlayan yapay zeka destekli sohbet sistemi
+
+### 📊 Otomatik Bütçe Önerisi (DAHA YAPILMADI)
+- Kullanıcının geçmiş harcama verilerini analiz ederek aylık önerilen bütçe dağılımı oluşturur
+
+- Gelirin belirli oranlarını kategori bazlı paylaştırır (örneğin: %30 gıda, %20 kira, %10 eğlence vb.)
+
+- Harcama eğilimlerine göre kişiselleştirilmiş bütçe desteği sunar.
+
+### 🎮 “Ne Alsam?” Danışmanı (DAHA YAPILMADI)
+- Kullanıcının belirttiği bütçe ve ilgi alanına göre alışveriş önerileri sunar
+
 
 ---
 
@@ -65,14 +79,23 @@ Bu uygulama, kullanıcıların gelir ve giderlerini kolayca takip etmelerini, ka
 
 ### Gereksinimler
 
-- Python 3.x  
-- `Tkinter` *(Python ile birlikte gelir, genellikle ek kurulum gerekmez)*  
-- `sqlite3` *(Python ile birlikte gelir)*  
-- `matplotlib`  
-- `pandas`  
-- `tkcalendar`  
-- `bcrypt`  
-- `reportlab`
+`tkinter` (Python ile birlikte gelir)
+
+`sqlite3` (Python ile birlikte gelir)
+
+`matplotlib`
+
+`tkcalendar`
+
+`reportlab`
+
+`scikit-learn`
+
+`joblib`
+
+`pandas` (AI modülü için yardımcı olabilir, manuel kurulum gerekebilir)
+
+`numpy` (scikit-learn bağımlılığı olabilir)
 
 ### Bağımlılıkların Yüklenmesi
 

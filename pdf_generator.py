@@ -38,105 +38,118 @@ class PDFGenerator:
         self.font_name = font_name
         self.db_manager = db_manager
         self.user_id = user_id
+        # getSampleStyleSheet() çağrısını bir kere yapıp stil nesnesini al
         self.styles = getSampleStyleSheet()
         self._setup_styles()
 
     def _setup_styles(self):
         """PDF için özel stilleri ayarlar."""
-        # 'Title' stilini doğrudan SampleStyleSheet'ten alıp güncelliyoruz
-        if 'Title' not in self.styles:
+        # ReportLab'ın varsayılan stil sayfasını kopyala, böylece güvenle değiştirebiliriz
+        # ve add metoduyla çakışmayız.
+        # Aslında en doğru yöntem, varsayılan stillerin özelliklerini direkt değiştirmektir
+        # ve kendi eklediğimiz stilleri add metoduyla eklemektir.
+
+        # Title Style: Varsayılan 'Title' stilini doğrudan güncelliyoruz.
+        # Bu, 'KeyError: "Style 'Title' already defined in stylesheet"' hatasını önler.
+        if 'Title' in self.styles:
+            self.styles['Title'].fontName = self.font_name
+            self.styles['Title'].fontSize = 20
+            self.styles['Title'].leading = 24
+            self.styles['Title'].alignment = TA_CENTER
+            self.styles['Title'].spaceAfter = 20
+        else:  # Nadiren buraya düşer, ama tanımlı olsun
             self.styles.add(ParagraphStyle(name='Title',
-                                           parent=self.styles['h1'],
+                                           parent=self.styles['h1'] if 'h1' in self.styles else self.styles['Normal'],
                                            fontName=self.font_name,
                                            fontSize=20,
                                            leading=24,
                                            alignment=TA_CENTER,
                                            spaceAfter=20))
-        else:
-            title_style = self.styles['Title']
-            title_style.fontName = self.font_name
-            title_style.fontSize = 20
-            title_style.leading = 24
-            title_style.alignment = TA_CENTER
-            title_style.spaceAfter = 20
 
-        # 'Heading1' stilini doğrudan SampleStyleSheet'ten alıp güncelliyoruz
-        if 'Heading1' not in self.styles:
-            self.styles.add(ParagraphStyle(name='Heading1',
-                                           parent=self.styles['h2'],
-                                           fontName=self.font_name,
-                                           fontSize=14,
-                                           leading=18,
-                                           alignment=TA_LEFT,
-                                           spaceBefore=12,
-                                           spaceAfter=6,
-                                           textColor=HexColor('#0056b3')))
-        else:
-            heading1_style = self.styles['Heading1']
-            heading1_style.fontName = self.font_name
-            heading1_style.fontSize = 14
-            heading1_style.leading = 18
-            heading1_style.alignment = TA_LEFT
-            heading1_style.spaceBefore = 12
-            heading1_style.spaceAfter = 6
-            heading1_style.textColor = HexColor('#0056b3')
+        # Ortak bir yardımcı fonksiyon, bir stili ekler veya eğer varsa günceller.
+        # Bu, tekrar tekrar if/else yazmaktan kurtarır.
+        def add_or_update_custom_style(style_obj):
+            if style_obj.name in self.styles:
+                # Var olan stili güncelle
+                existing_style = self.styles[style_obj.name]
+                for attr, value in style_obj.__dict__.items():
+                    # 'name' ve '_private' özniteliklerini değiştirmemeye dikkat et
+                    if not attr.startswith('_') and attr != 'name':
+                        setattr(existing_style, attr, value)
+            else:
+                # Yeni stili ekle
+                self.styles.add(style_obj)
 
-        # 'BodyText' stilini doğrudan SampleStyleSheet'ten alıp güncelliyoruz
-        if 'BodyText' not in self.styles:  # Bu kontrol eklendi
-            self.styles.add(ParagraphStyle(name='BodyText',
-                                           parent=self.styles['Normal'],
-                                           fontName=self.font_name,
-                                           fontSize=10,
-                                           leading=12,
-                                           alignment=TA_LEFT,
-                                           spaceAfter=6))
-        else:  # Eğer varsa özelliklerini güncelle
-            bodytext_style = self.styles['BodyText']
-            bodytext_style.fontName = self.font_name
-            bodytext_style.fontSize = 10
-            bodytext_style.leading = 12
-            bodytext_style.alignment = TA_LEFT
-            bodytext_style.spaceAfter = 6
+        # Diğer özel stilleri eklerken bu yardımcı fonksiyonu kullan.
+        # Heading1 Style
+        add_or_update_custom_style(ParagraphStyle(name='Heading1',
+                                                  parent=self.styles['h2'] if 'h2' in self.styles else self.styles[
+                                                      'Normal'],
+                                                  fontName=self.font_name,
+                                                  fontSize=14,
+                                                  leading=18,
+                                                  alignment=TA_LEFT,
+                                                  spaceBefore=12,
+                                                  spaceAfter=6,
+                                                  textColor=HexColor('#0056b3')))
 
-        self.styles.add(ParagraphStyle(name='TableHeader',
-                                       parent=self.styles['Normal'],
-                                       fontName=self.font_name,
-                                       fontSize=9,
-                                       leading=11,
-                                       alignment=TA_CENTER,
-                                       textColor=HexColor('#ffffff'),
-                                       backColor=HexColor('#4CAF50')))  # Yeşil başlık
-        self.styles.add(ParagraphStyle(name='TableBody',
-                                       parent=self.styles['Normal'],
-                                       fontName=self.font_name,
-                                       fontSize=9,
-                                       leading=11,
-                                       alignment=TA_LEFT))
-        self.styles.add(ParagraphStyle(name='Totals',
-                                       parent=self.styles['Normal'],
-                                       fontName=self.font_name,
-                                       fontSize=11,
-                                       leading=14,
-                                       alignment=TA_RIGHT,
-                                       spaceBefore=10,
-                                       textColor=HexColor('#333333')))
-        self.styles.add(ParagraphStyle(name='GrandTotal',
-                                       parent=self.styles['Normal'],
-                                       fontName=self.font_name,
-                                       fontSize=14,
-                                       leading=16,
-                                       alignment=TA_RIGHT,
-                                       spaceBefore=10,
-                                       textColor=HexColor('#0056b3'),
-                                       backColor=HexColor('#e6f2ff'),
-                                       borderPadding=(5, 5, 5, 5)))
-        self.styles.add(ParagraphStyle(name='SmallText',
-                                       parent=self.styles['Normal'],
-                                       fontName=self.font_name,
-                                       fontSize=8,
-                                       leading=9,
-                                       alignment=TA_LEFT,
-                                       textColor=HexColor('#666666')))
+        # BodyText Style
+        add_or_update_custom_style(ParagraphStyle(name='BodyText',
+                                                  parent=self.styles['Normal'],
+                                                  fontName=self.font_name,
+                                                  fontSize=10,
+                                                  leading=12,
+                                                  alignment=TA_LEFT,
+                                                  spaceAfter=6))
+
+        # TableHeader Style
+        add_or_update_custom_style(ParagraphStyle(name='TableHeader',
+                                                  parent=self.styles['Normal'],
+                                                  fontName=self.font_name,
+                                                  fontSize=9,
+                                                  leading=11,
+                                                  alignment=TA_CENTER,
+                                                  textColor=HexColor('#ffffff'),
+                                                  backColor=HexColor('#4CAF50')))
+
+        # TableBody Style
+        add_or_update_custom_style(ParagraphStyle(name='TableBody',
+                                                  parent=self.styles['Normal'],
+                                                  fontName=self.font_name,
+                                                  fontSize=9,
+                                                  leading=11,
+                                                  alignment=TA_LEFT))
+
+        # Totals Style
+        add_or_update_custom_style(ParagraphStyle(name='Totals',
+                                                  parent=self.styles['Normal'],
+                                                  fontName=self.font_name,
+                                                  fontSize=11,
+                                                  leading=14,
+                                                  alignment=TA_RIGHT,
+                                                  spaceBefore=10,
+                                                  textColor=HexColor('#333333')))
+
+        # GrandTotal Style
+        add_or_update_custom_style(ParagraphStyle(name='GrandTotal',
+                                                  parent=self.styles['Normal'],
+                                                  fontName=self.font_name,
+                                                  fontSize=14,
+                                                  leading=16,
+                                                  alignment=TA_RIGHT,
+                                                  spaceBefore=10,
+                                                  textColor=HexColor('#0056b3'),
+                                                  backColor=HexColor('#e6f2ff'),
+                                                  borderPadding=(5, 5, 5, 5)))
+
+        # SmallText Style
+        add_or_update_custom_style(ParagraphStyle(name='SmallText',
+                                                  parent=self.styles['Normal'],
+                                                  fontName=self.font_name,
+                                                  fontSize=8,
+                                                  leading=9,
+                                                  alignment=TA_LEFT,
+                                                  textColor=HexColor('#666666')))
 
     def generate_general_report_pdf(self, report_data, filename="genel_rapor.pdf"):
         """
@@ -163,7 +176,7 @@ class PDFGenerator:
             story.append(Spacer(1, 0.2 * cm))
 
             data = section.get("data", [])
-            if data:
+            if data and len(data) > 0:  # Veri olup olmadığını ve başlık satırı olduğunu kontrol et
                 # Tablo oluştur
                 table_data = []
                 # Başlık satırı
@@ -174,7 +187,13 @@ class PDFGenerator:
                 for row_data in data[1:]:
                     table_data.append([Paragraph(str(item), self.styles['TableBody']) for item in row_data])
 
-                table = Table(table_data, colWidths=[doc.width / len(data[0])] * len(data[0]))
+                # Kolon genişliklerini dinamik olarak ayarla
+                if len(data[0]) > 0:
+                    col_widths = [doc.width / len(data[0])] * len(data[0])
+                else:
+                    col_widths = [doc.width]  # Tek sütunlu durum için fallback
+
+                table = Table(table_data, colWidths=col_widths)
                 table.setStyle(TableStyle([
                     ('BACKGROUND', (0, 0), (-1, 0), HexColor('#4CAF50')),  # Başlık satırı yeşil
                     ('TEXTCOLOR', (0, 0), (-1, 0), HexColor('#ffffff')),
@@ -204,29 +223,45 @@ class PDFGenerator:
         except Exception as e:
             raise Exception(f"PDF oluşturma hatası: {e}")
 
-    def generate_document_pdf(self, doc_detail):
+    def generate_document_pdf(self, doc_data):
         """
         Fatura veya Teklif belgesini PDF olarak oluşturur.
-        doc_detail: Veritabanından çekilen fatura/teklif detayları.
-        (id, type, document_number, customer_name, document_date, due_validity_date, items_json, total_amount_excluding_kdv, total_kdv_amount, notes, status, user_id)
+        doc_data: fingo_app.py'den gelen sözlük formatında fatura/teklif detayları.
+        Örnek doc_data yapısı:
+        {
+            "doc_type": "Fatura",
+            "doc_number": "FTR-2024-00001",
+            "customer_name": "Müşteri Adı",
+            "doc_date": "2024-06-19",
+            "due_valid_date": "2024-07-19",
+            "items": [{"ad": "Ürün 1", "miktar": 2, ...}],
+            "total_excl_kdv": 100.0,
+            "total_kdv": 18.0,
+            "notes": "Ek Notlar",
+            "status": "Ödendi"
+        }
         """
-        doc_type = doc_detail[1]  # 'Fatura' veya 'Teklif'
-        document_number = doc_detail[2]
-        customer_name = doc_detail[3]
-        document_date = doc_detail[4]
-        due_validity_date = doc_detail[5]
-        items_json = doc_detail[6]
-        total_excl_kdv = doc_detail[7]
-        total_kdv = doc_detail[8]
-        notes = doc_detail[9]
-        status = doc_detail[10]
-        user_id = doc_detail[11]
+        doc_type = doc_data.get("doc_type", "Belge")
+        document_number = doc_data.get("doc_number", "N/A")
+        customer_name = doc_data.get("customer_name", "N/A")
+        document_date = doc_data.get("doc_date", "N/A")
+        due_validity_date = doc_data.get("due_valid_date", "N/A")
+        items = doc_data.get("items", [])  # Zaten JSON'dan dönüştürülmüş liste olmalı
+        total_excl_kdv = doc_data.get("total_excl_kdv", 0.0)
+        total_kdv = doc_data.get("total_kdv", 0.0)
+        notes = doc_data.get("notes", "")
+        status = doc_data.get("status", "N/A")
 
         # Müşteri bilgilerini al
-        customer_info = self.db_manager.get_customer_by_name(customer_name, user_id)  # Kendi kullanıcısına ait müşteri
-        customer_address = customer_info[2] if customer_info else "Belirtilmemiş"
-        customer_phone = customer_info[3] if customer_info else "Belirtilmemiş"
-        customer_email = customer_info[4] if customer_info else "Belirtilmemiş"
+        # db_manager'daki get_customer_by_name metodunu kullanarak müşteri bilgilerini al
+        customer_info = self.db_manager.get_customer_by_name(customer_name, self.user_id)
+        # customer_info bir tuple döneceği için güvenli erişim sağlayalım
+        customer_address = customer_info[2] if customer_info and len(customer_info) > 2 and customer_info[
+            2] else "Belirtilmemiş"
+        customer_phone = customer_info[3] if customer_info and len(customer_info) > 3 and customer_info[
+            3] else "Belirtilmemiş"
+        customer_email = customer_info[4] if customer_info and len(customer_info) > 4 and customer_info[
+            4] else "Belirtilmemiş"
 
         filename = f"{document_number}_{doc_type}.pdf"
         doc = SimpleDocTemplate(filename, pagesize=A4, rightMargin=1.5 * cm, leftMargin=1.5 * cm, topMargin=1.5 * cm,
@@ -274,7 +309,6 @@ class PDFGenerator:
         story.append(Paragraph("Kalemler", self.styles['Heading1']))
         story.append(Spacer(1, 0.2 * cm))
 
-        items = json.loads(items_json)
         table_data = [
             [
                 Paragraph("Ürün/Hizmet", self.styles['TableHeader']),

@@ -49,3 +49,13 @@ def is_valid_password(password):
         return False, "Şifre en az bir özel karakter içermelidir (!@#$%^&* vb.)."
     return True, ""
 
+# --- Yeni Eklenen Fonksiyon ---
+def validate_numeric_input(P):
+    """Tkinter Entry widget'ları için sayısal giriş doğrulaması yapar."""
+    if P.strip() == "":
+        return True # Boş girişlere izin ver (silme, temizleme gibi durumlarda)
+    try:
+        float(P)
+        return True
+    except ValueError:
+        return False

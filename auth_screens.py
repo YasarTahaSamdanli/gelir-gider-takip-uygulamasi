@@ -1,87 +1,119 @@
 # auth_screens.py
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, ttk
+from database_manager import DatabaseManager # DatabaseManager sınıfını import et
+from utils import is_valid_password # is_valid_password fonksiyonunu import et
 
-class LoginScreen(tk.Frame):
-    def __init__(self, parent, app_controller):
-        """
-        Giriş ekranı.
-        Args:
-            parent (tk.Tk): Ana Tkinter penceresi.
-            app_controller (LoginRegisterApp): Ana uygulama denetleyicisi.
-        """
-        super().__init__(parent, bg="#f5f5f5")
+class AuthScreens:
+    def __init__(self, root, app_controller):
+        self.root = root
         self.app_controller = app_controller
+        self.db_manager = app_controller.db_manager # DatabaseManager örneğini app_controller'dan al
+        self.root.title("Fingo - Giriş / Kayıt")
+        # self.root.geometry("400x350") # Bu satırı main.py'de yönetiyoruz
+        # self.root.resizable(False, False) # BU SATIR KALDIRILDI / YORUM SATIRINA ALINDI
 
-        tk.Label(self, text="Fingo'ya Hoş Geldiniz!", font=("Arial", 16, "bold"), bg="#f5f5f5", fg="#333").pack(pady=20)
+        # Style ayarları
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure("TFrame", background="#f5f5f5")
+        style.configure("TLabel", background="#f5f5f5", font=("Arial", 10))
+        style.configure("TEntry", font=("Arial", 10))
+        # Buton metin rengi artık daha belirgin olması için beyaz olarak ayarlandı
+        style.configure("TButton", font=("Arial", 10, "bold"), padding=8, background="#007bff", foreground="white")
+        style.map("TButton", background=[('active', '#0056b3')]) # Hover rengi
 
-        input_frame = tk.Frame(self, bg="#f5f5f5")
-        input_frame.pack(pady=10)
+        self.current_frame = None
+        self.show_login_screen()
 
-        tk.Label(input_frame, text="Kullanıcı Adı:", bg="#f5f5f5", fg="#555").grid(row=0, column=0, pady=5, sticky="w")
-        self.username_entry = tk.Entry(input_frame, width=30, font=("Arial", 10), bd=1, relief="solid")
-        self.username_entry.grid(row=0, column=1, pady=5, padx=5)
+    def clear_frame(self):
+        """Mevcut frame'i temizler."""
+        if self.current_frame:
+            for widget in self.current_frame.winfo_children():
+                widget.destroy()
+            self.current_frame.destroy()
+            self.current_frame = None
 
-        tk.Label(input_frame, text="Şifre:", bg="#f5f5f5", fg="#555").grid(row=1, column=0, pady=5, sticky="w")
-        self.password_entry = tk.Entry(input_frame, show="*", width=30, font=("Arial", 10), bd=1, relief="solid")
-        self.password_entry.grid(row=1, column=1, pady=5, padx=5)
+    def show_login_screen(self):
+        """Giriş ekranını gösterir."""
+        self.clear_frame()
+        self.current_frame = ttk.Frame(self.root, padding="20 20 20 20")
+        self.current_frame.pack(expand=True, fill='both')
 
-        login_button = tk.Button(self, text="Giriş Yap", command=self.login, bg="#4CAF50", fg="white", font=("Arial", 10, "bold"), relief="raised", bd=2)
-        login_button.pack(pady=10)
+        ttk.Label(self.current_frame, text="Fingo'ya Hoş Geldiniz", font=("Arial", 16, "bold")).pack(pady=10)
+        ttk.Label(self.current_frame, text="Giriş Yapın", font=("Arial", 12)).pack(pady=5)
 
-        register_link = tk.Label(self, text="Hesabınız yok mu? Kayıt Olun", fg="#007bff", bg="#f5f5f5", cursor="hand2")
-        register_link.pack(pady=5)
-        register_link.bind("<Button-1>", lambda e: self.app_controller.show_register_screen())
+        ttk.Label(self.current_frame, text="Kullanıcı Adı:").pack(pady=5)
+        self.login_username_entry = ttk.Entry(self.current_frame)
+        self.login_username_entry.pack(pady=2)
+
+        ttk.Label(self.current_frame, text="Şifre:").pack(pady=5)
+        self.login_password_entry = ttk.Entry(self.current_frame, show="*")
+        self.login_password_entry.pack(pady=2)
+
+        ttk.Button(self.current_frame, text="Giriş Yap", command=self.login).pack(pady=10)
+        ttk.Button(self.current_frame, text="Hesabınız Yok Mu? Kayıt Ol", command=self.show_register_screen).pack(pady=5)
+
+    def show_register_screen(self):
+        """Kayıt ekranını gösterir."""
+        self.clear_frame()
+        self.current_frame = ttk.Frame(self.root, padding="20 20 20 20")
+        self.current_frame.pack(expand=True, fill='both')
+
+        ttk.Label(self.current_frame, text="Yeni Hesap Oluştur", font=("Arial", 16, "bold")).pack(pady=10)
+
+        ttk.Label(self.current_frame, text="Kullanıcı Adı:").pack(pady=5)
+        self.register_username_entry = ttk.Entry(self.current_frame)
+        self.register_username_entry.pack(pady=2)
+
+        ttk.Label(self.current_frame, text="Şifre:").pack(pady=5)
+        self.register_password_entry = ttk.Entry(self.current_frame, show="*")
+        self.register_password_entry.pack(pady=2)
+
+        ttk.Label(self.current_frame, text="Şifre Tekrar:").pack(pady=5)
+        self.register_password_confirm_entry = ttk.Entry(self.current_frame, show="*")
+        self.register_password_confirm_entry.pack(pady=2)
+
+        ttk.Button(self.current_frame, text="Kayıt Ol", command=self.register).pack(pady=10)
+        ttk.Button(self.current_frame, text="Zaten hesabınız var mı? Giriş Yap", command=self.show_login_screen).pack(pady=5)
 
     def login(self):
-        """Giriş işlemini yapar."""
-        username = self.username_entry.get()
-        password = self.password_entry.get()
+        """Kullanıcı girişi işlemini yapar."""
+        username = self.login_username_entry.get()
+        password = self.login_password_entry.get()
 
-        if not username or not password:
-            messagebox.showerror("Hata", "Lütfen tüm alanları doldurun.")
-            return
-
-        user_id = self.app_controller.db_manager.verify_user(username, password)
+        user_id = self.db_manager.check_user(username, password)
         if user_id:
             messagebox.showinfo("Başarılı", "Giriş başarılı!")
             self.app_controller.start_main_app(user_id, username)
         else:
             messagebox.showerror("Hata", "Kullanıcı adı veya şifre hatalı.")
 
+    def register(self):
+        """Yeni kullanıcı kaydı işlemini yapar."""
+        username = self.register_username_entry.get()
+        password = self.register_password_entry.get()
+        password_confirm = self.register_password_confirm_entry.get()
 
-class RegisterScreen(tk.Frame):
-    def __init__(self, parent, app_controller):
-        """
-        Kayıt ekranı.
-        Args:
-            parent (tk.Tk): Ana Tkinter penceresi.
-            app_controller (LoginRegisterApp): Ana uygulama denetleyicisi.
-        """
-        super().__init__(parent, bg="#f5f5f5")
-        self.app_controller = app_controller
+        if not username or not password or not password_confirm:
+            messagebox.showerror("Hata", "Lütfen tüm alanları doldurun.")
+            return
 
-        tk.Label(self, text="Yeni Hesap Oluştur", font=("Arial", 16, "bold"), bg="#f5f5f5", fg="#333").pack(pady=20)
+        if password != password_confirm:
+            messagebox.showerror("Hata", "Şifreler uyuşmuyor.")
+            return
 
-        input_frame = tk.Frame(self, bg="#f5f5f5")
-        input_frame.pack(pady=10)
+        # Şifre karmaşıklık kontrolü
+        is_valid, error_message = is_valid_password(password)
+        if not is_valid:
+            messagebox.showerror("Şifre Hatası", error_message)
+            return
 
-        tk.Label(input_frame, text="Kullanıcı Adı:", bg="#f5f5f5", fg="#555").grid(row=0, column=0, pady=5, sticky="w")
-        self.username_entry = tk.Entry(input_frame, width=30, font=("Arial", 10), bd=1, relief="solid")
-        self.username_entry.grid(row=0, column=1, pady=5, padx=5)
+        # Kullanıcı ekleme işlemi ve olası hata yönetimi
+        if self.db_manager.add_user(username, password):
+            messagebox.showinfo("Başarılı", "Kayıt işlemi başarılı! Giriş yapabilirsiniz.")
+            self.show_login_screen()
+        else:
+            # add_user metodu IntegrityError'ı yakalayıp False döndürüyor
+            messagebox.showerror("Kayıt Hatası", "Kayıt işlemi başarısız. Kullanıcı adı zaten mevcut olabilir.")
 
-        tk.Label(input_frame, text="Şifre:", bg="#f5f5f5", fg="#555").grid(row=1, column=0, pady=5, sticky="w")
-        self.password_entry = tk.Entry(input_frame, show="*", width=30, font=("Arial", 10), bd=1, relief="solid")
-        self.password_entry.grid(row=1, column=1, pady=5, padx=5)
-
-        tk.Label(input_frame, text="Şifre Tekrarı:", bg="#f5f5f5", fg="#555").grid(row=2, column=0, pady=5, sticky="w")
-        self.confirm_password_entry = tk.Entry(input_frame, show="*", width=30, font=("Arial", 10), bd=1, relief="solid")
-        self.confirm_password_entry.grid(row=2, column=1, pady=5, padx=5)
-
-        # Buton doğrudan LoginRegisterApp'teki register_user metodunu çağırıyor
-        register_button = tk.Button(self, text="Kayıt Ol", command=self.app_controller.register_user, bg="#007bff", fg="white", font=("Arial", 10, "bold"), relief="raised", bd=2)
-        register_button.pack(pady=10)
-
-        login_link = tk.Label(self, text="Zaten hesabınız var mı? Giriş Yapın", fg="#007bff", bg="#f5f5f5", cursor="hand2")
-        login_link.pack(pady=5)
-        login_link.bind("<Button-1>", lambda e: self.app_controller.show_login_screen())

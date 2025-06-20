@@ -5,6 +5,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.naive_bayes import MultinomialNB
 from sklearn.pipeline import Pipeline
 from sklearn.exceptions import NotFittedError
+from datetime import datetime, timedelta
 
 
 class AIPredictor:
@@ -28,323 +29,81 @@ class AIPredictor:
         # Debug çıktısı: Uygulama çalışma dizinini göster
         print(f"DEBUG: AIPredictor başlatıldı. Çalışma dizini: {os.getcwd()}")
 
-        # Modelin başlatılmasını ve eğitilmesini veya yüklenmesini yönet
-        self._load_or_retrain_model_with_user_data()
+        # Modelin başlatılmasını ve eğitilmesini veya yüklenmesini __init__ yerine
+        # ayrı bir metoda taşıdık, böylece UI hazır olduğunda çağrılabilir.
+        # self.load_or_train_model() # Bu satır fingo_app.py'ye taşındı
 
-    def _load_or_retrain_model_with_user_data(self):
+    def load_or_train_model(self, force_retrain=False):
         """
-        Kayıtlı modeli ve vektörleyiciyi yükler veya kullanıcı verisiyle yeniden eğitir.
-        """
-        descriptions = []
-        categories = []
-
-        # Kullanıcının kendi işlemlerini veritabanından çek
-        user_transactions = self.db_manager.get_all_transaction_descriptions_and_categories(self.user_id)
-        if user_transactions:
-            for desc, cat in user_transactions:
-                # Boş veya NULL değerleri atla (Bu satır önemli, veri tutarsızlığını engellemeli)
-                if desc is not None and cat is not None and str(desc).strip() != '' and str(cat).strip() != '':
-                    descriptions.append(str(desc).strip())
-                    categories.append(str(cat).strip())
-
-
-        # Eğer kullanıcının kendi verisi yoksa veya çok azsa, sentetik veriyle başla
-        if len(descriptions) < 10:  # Minimum eğitim verisi eşiği
-            print("Yeterli kullanıcı verisi bulunamadı, sentetik veriyle ilk eğitim yapılıyor.")
-            synthetic_descriptions, synthetic_categories = self._get_synthetic_data()
-            descriptions.extend(synthetic_descriptions)
-            categories.extend(synthetic_categories)
-        else:
-            print("Yeterli kullanıcı verisi bulundu, model kullanıcı verisiyle eğitiliyor.")
-
-        # Model dosyaları mevcut mu kontrol et
-        if os.path.exists(self.model_path) and os.path.exists(self.vectorizer_path):
-            try:
-                # Mevcut modeli yüklemeye çalış
-                loaded_pipeline = joblib.load(self.model_path)
-                self.vectorizer = joblib.load(self.vectorizer_path)
-                self.model = loaded_pipeline  # Yüklenen pipeline'ı doğrudan model olarak kullan
-                print("Yapay zeka modeli ve vektörleyici başarıyla yüklendi.")
-
-                # Yüklenen modeli yeni veya güncel verilerle yeniden eğit (incremental fit yerine full fit)
-                if descriptions and categories:
-                    print("Yüklenen model, yeni/güncel kullanıcı verisiyle yeniden eğitiliyor...")
-                    self.retrain_model(descriptions, categories)
-
-            except Exception as e:
-                # Model yüklenirken bir hata olursa, hata mesajını yazdır ve yeniden eğitmeyi dene
-                print(
-                    f"Hata: Yapay zeka modeli yüklenirken bir sorun oluştu ({e}). Kullanıcı verisiyle yeniden eğitiliyor...")
-                if descriptions and categories:
-                    self.retrain_model(descriptions, categories)
-                else:
-                    print("Yeterli veri olmadığı için model eğitilemedi.")
-        else:
-            # Model dosyaları bulunamazsa, ilk eğitimi yap
-            print("Yapay zeka modeli bulunamadı. Kullanıcı verisiyle ilk eğitim yapılıyor...")
-            if descriptions and categories:
-                self.retrain_model(descriptions, categories)
-            else:
-                print("Yeterli veri olmadığı için model eğitilemedi.")
-
-    def _get_synthetic_data(self):
-        """
-        Detaylı sentetik veri setini döndürür. Bu veri seti, modelin daha geniş bir yelpazede
-        kategorileri tanımasına yardımcı olmak için çeşitli açıklamalardan oluşur.
-        Bu kısım senin için çalışan genişletilmiş sentetik veri setidir.
-        """
-        descriptions = [
-            # Market Gideri (21)
-            "Market", "Gıda harcaması A101", "Süpermarket",
-            "Şok market", "Marketten günlük ihtiyaçlar",
-            "Yerel manavdan taze sebze meyve", "Kasaptan et alımı",
-            "Ekmek, süt, yumurta alışverişi", "Haftalık market alışverişi",
-            "Atıştırmalık ve içecek alımı", "Ev için temizlik malzemeleri",
-            "Bebek maması ve bezi", "Evcil hayvan maması ve kumu",
-            "Online market siparişi", "Groseri'den alışveriş",
-            "Yerel bakkaldan sigara ve gazete", "Kahvaltılık ürünler",
-            "Deterjan ve sabun alımı", "Şarküteri ürünleri",
-            "Meyve suyu ve soda", "Temel gıda maddeleri",
-
-            # Fatura Gideri (20)
-            "Fatura", "Su faturası", "Doğalgaz faturası",
-            "Telefon faturası", "İnternet faturası",
-            "Elektirik faturası", "Netflix aboneliği", "Su aboneliği",
-            "Elektrik dağıtım bedeli", "Isınma gideri",
-            "Aidat ödemesi (apartman)", "Kira ödemesi", "İGDAŞ fatura",
-            "TurkNet internet faturası", "Vergi ödemesi MTV",
-            "Belediye çöp vergisi", "Emlak vergisi taksiti",
-            "Kredi kartı dönem borcu ödemesi (faiz hariç)",
-            "Bireysel emeklilik katkı payı", "Sağlık sigortası primi",
-
-            # Yemek Gideri (20)
-            "Restoran yemeği", "Dışarıda yemek", "Cafe masrafı",
-            "Pizza siparişi", "Kebapçı hesabı", "Fast food menü",
-            "Öğle yemeği işyerinde", "Akşam yemeği dışarıda",
-            "Kahve ve pasta", "Burger King menü", "Starbucks kahve",
-            "Lokantada hesap", "Ev yemeği siparişi",
-            "Çiğ köfte alımı", "Çay bahçesi oturumu",
-            "Pastane tatlıları", "Dondurma alımı", "Büfeden sandviç",
-            "Yemek", "Dürüm döner",
-
-            # Maaş Geliri (14)
-            "Maaş ödemesi", "Aylık kazanç", "Sabit gelir",
-            "Şirket maaşı", "Ay sonu ödemesi", "Prim ödemesi",
-            "İkramiye", "Fazla mesai ücreti", "Nakit maaş",
-            "Banka hesabına maaş yatırma", "Girişimden gelir",
-            "Emekli maaşı", "Devletten yardım", "Burs ödemesi",
-
-            # Freelance Gelir (14)
-            "Serbest çalışma geliri", "Danışmanlık ücreti", "Proje bazlı ödeme",
-            "Grafik tasarım işi", "Yazılım geliştirme geliri",
-            "Çeviri hizmeti karşılığı", "Web sitesi tasarımı",
-            "Sosyal medya yönetimi ödemesi", "Makale yazım ücreti",
-            "Eğitmenlik geliri", "Online ders ücreti", "Fotoğraf çekimi",
-            "Kripto para kazancı", "Hisse senedi satış karı",
-
-            # Araç Gideri (18)
-            "Benzin istasyonu", "Akaryakıt alımı", "Araç Gideri",
-            "Oto yıkama", "Lastik değişimi", "Motor yağı",
-            "Muayene ücreti", "Kasko ödemesi", "Trafik sigortası",
-            "Tamirci masrafı", "Yedek parça alımı", "Otoyol ücreti",
-            "Köprü geçişi", "Park ücreti", "Araba kiralama",
-            "Motorin alımı", "LPG dolumu", "Araç bakım",
-
-            # Kira (Ev & İş Yeri & Gelir) (6)
-            "Kira ödemesi", "Ev kirası", "Dükkan kirası",
-            "Depo kirası", "Kira geliri", "Mülk kirası",
-
-            # Alışveriş Gideri (19)
-            "Online alışveriş Trendyol", "Giyim alışverişi", "Kitap alımı",
-            "Elektronik eşya", "Ayakkabı alımı", "Çanta",
-            "Kozmetik ürünler", "Mobilya", "Beyaz eşya",
-            "Hobi malzemeleri", "Spor malzemeleri", "Telefon aksesuarları",
-            "Market dışı genel alışveriş", "Amazon siparişi",
-            "Hepsiburada'dan ürün", "Zara'dan giysi", "Bershka alışverişi",
-            "Decathlon'dan spor ayakkabı", "Teknosa'dan laptop",
-
-            # Ulaşım Gideri (15)
-            "Ulaşım otobüs bileti", "Taksi ücreti", "Otobüs kartı dolumu",
-            "Metro kartı yükleme", "Tren bileti", "Uçak bileti",
-            "Servis ücreti", "Dolmuş parası", "Deniz taksi",
-            "Vapur bileti", "Toplu taşıma kartı", "Özel şoför",
-            "Araç paylaşım servisi", "Bisiklet tamiri", "Scooter kiralama",
-
-            # Eğlence/Spor (20)
-            "Spor salonu üyeliği", "Fitness aboneliği", "Sinema bileti",
-            "Konser bileti", "Tiyatro gösterisi", "Maç bileti",
-            "Hafta sonu gezisi", "Tatil harcaması", "Oyun alımı (Steam)",
-            "Kitap okuma etkinliği", "Hobi kursu", "Yüzme dersi",
-            "Dans kursu", "Müze girişi", "Sergi gezisi",
-            "Hayvanat bahçesi ziyareti", "Lunapark bileti", "Bilgisayar oyunu",
-            "Bowling oynama", "Paintball etkinliği",
-
-            # Eğitim Gideri (12)
-            "Üniversite harcı", "Dershane ücreti", "Kitap ve kırtasiye",
-            "Online eğitim kursu", "Özel ders", "Yabancı dil kursu",
-            "Seminer katılım ücreti", "Workshop ücreti", "Eğitim materyalleri",
-            "Okul servisi", "Kreş ücreti", "Anaokulu ödemesi",
-
-            # Sağlık Gideri (14)
-            "Doktor muayene ücreti", "İlaç alımı", "Eczane masrafı",
-            "Diş hekimi", "Optik gözlük alımı", "Fizik tedavi",
-            "Hastane faturası", "Tıbbi testler", "Vitamin takviyeleri",
-            "Diyetisyen ücreti", "Psikolog seansı", "Termal tesis",
-            "Ameliyat masrafı", "Tıbbi sarf malzeme",
-
-            # Diğer Giderler (29)
-            "Hediyelik eşya", "Bağış", "Yardım",
-            "Kuru temizleme", "Terzi masrafı", "Kuaför",
-            "Berber", "Telefon hattı yükleme", "Vergi (ek)",
-            "Borç ödemesi", "Çeyiz hesabı", "Çocuk harçlığı",
-            "Bahçe bakımı", "Ev tadilatı", "Tamirci",
-            "Sigara alımı", "Alkollü içecekler", "Oyun borcu",
-            "Kumar", "Şans oyunu", "Hayır kurumu bağışı",
-            "Dernek aidatı", "Cami yardımı", "Doğum günü hediyesi",
-            "Yıldönümü hediyesi", "Hızlı para çekimi", "Komisyon ücreti",
-            "Banka işlem ücreti", "Kargo ücreti", "Servis bedeli",
-            "Özel ders ücreti", "Hukuk danışmanlığı", "Mali müşavir ücreti"
-        ]
-
-        categories = [
-            "Market Gideri", "Market Gideri", "Market Gideri",
-            "Market Gideri", "Market Gideri", "Market Gideri",
-            "Market Gideri", "Market Gideri", "Market Gideri",
-            "Market Gideri", "Market Gideri", "Market Gideri",
-            "Evcil Hayvan Gideri", "Market Gideri", "Market Gideri",
-            "Market Gideri", "Market Gideri", "Market Gideri",
-            "Market Gideri", "Market Gideri", "Market Gideri",
-
-            "Fatura Gideri", "Fatura Gideri", "Fatura Gideri",
-            "Fatura Gideri", "Fatura Gideri", "Fatura Gideri",
-            "Fatura Gideri", "Fatura Gideri", "Fatura Gideri",
-            "Fatura Gideri", "Ev Kirası", "İş Yeri Kirası", # "Kira ödemesi" ve "Ev kirası" Ev Kirası, "Aidat ödemesi" Fatura Gideri, "Dükkan kirası" İş Yeri Kirası olmalıydı, düzeltildi
-            "İş Yeri Kirası", "Kira Geliri", "Diğer Gelir", # "Kira geliri" ve "Mülk kirası" Diğer Gelir olarak işaretlendi
-            "Vergi Gideri",
-            "Vergi Gideri", "Vergi Gideri", "Finansal Gider",
-            "Finansal Gider", "Sağlık Gideri",
-
-            "Yemek Gideri", "Yemek Gideri", "Yemek Gideri",
-            "Yemek Gideri", "Yemek Gideri", "Yemek Gideri",
-            "Yemek Gideri", "Yemek Gideri", "Yemek Gideri",
-            "Yemek Gideri", "Yemek Gideri", "Yemek Gideri",
-            "Yemek Gideri", "Yemek Gideri", "Yemek Gideri",
-            "Yemek Gideri", "Yemek Gideri", "Yemek Gideri",
-            "Yemek Gideri", "Yemek Gideri",
-
-            "Maaş Geliri", "Maaş Geliri", "Maaş Geliri",
-            "Maaş Geliri", "Maaş Geliri", "Maaş Geliri",
-            "Maaş Geliri", "Maaş Geliri", "Maaş Geliri",
-            "Maaş Geliri", "Maaş Geliri", "Maaş Geliri",
-            "Diğer Gelir", "Diğer Gelir",
-
-            "Freelance Gelir", "Freelance Gelir", "Freelance Gelir",
-            "Freelance Gelir", "Freelance Gelir",
-            "Freelance Gelir", "Freelance Gelir",
-            "Freelance Gelir", "Freelance Gelir",
-            "Eğitim Geliri", "Eğitim Geliri", "Freelance Gelir",
-            "Yatırım Geliri", "Yatırım Geliri",
-
-            "Araç Gideri", "Araç Gideri", "Araç Gideri",
-            "Araç Gideri", "Araç Gideri", "Araç Gideri",
-            "Araç Gideri", "Araç Gideri", "Araç Gideri",
-            "Araç Gideri", "Araç Gideri", "Ulaşım Gideri",
-            "Ulaşım Gideri", "Ulaşım Gideri", "Ulaşım Gideri",
-            "Araç Gideri", "Araç Gideri", "Araç Gideri",
-
-            "Ev Kirası", "Ev Kirası", "İş Yeri Kirası",
-            "İş Yeri Kirası", "Kira Geliri", "Diğer Gelir",
-
-            "Alışveriş Gideri", "Alışveriş Gideri", "Alışveriş Gideri",
-            "Alışveriş Gideri", "Alışveriş Gideri", "Alışveriş Gideri",
-            "Alışveriş Gideri", "Alışveriş Gideri", "Alışveriş Gideri",
-            "Alışveriş Gideri", "Alışveriş Gideri", "Alışveriş Gideri",
-            "Alışveriş Gideri", "Alışveriş Gideri",
-            "Alışveriş Gideri", "Alışveriş Gideri", "Alışveriş Gideri",
-            "Alışveriş Gideri", "Alışveriş Gideri",
-
-            "Ulaşım Gideri", "Ulaşım Gideri", "Ulaşım Gideri",
-            "Ulaşım Gideri", "Ulaşım Gideri", "Ulaşım Gideri",
-            "Ulaşım Gideri", "Ulaşım Gideri", "Ulaşım Gideri",
-            "Ulaşım Gideri", "Ulaşım Gideri", "Ulaşım Gideri",
-            "Ulaşım Gideri", "Ulaşım Gideri", "Ulaşım Gideri",
-
-            "Eğlence/Spor", "Eğlence/Spor", "Eğlence/Spor",
-            "Eğlence/Spor", "Eğlence/Spor", "Eğlence/Spor",
-            "Eğlence/Spor", "Eğlence/Spor", "Eğlence/Spor",
-            "Eğlence/Spor", "Eğlence/Spor", "Eğlence/Spor",
-            "Eğlence/Spor", "Eğlence/Spor", "Eğlence/Spor",
-            "Eğlence/Spor", "Eğlence/Spor", "Eğlence/Spor",
-            "Eğlence/Spor", "Eğlence/Spor",
-
-            "Eğitim Gideri", "Eğitim Gideri", "Eğitim Gideri",
-            "Eğitim Gideri", "Eğitim Gideri", "Eğitim Gideri",
-            "Eğitim Gideri", "Eğitim Gideri", "Eğitim Gideri",
-            "Ulaşım Gideri", "Eğitim Gideri", "Eğitim Gideri",
-
-            "Sağlık Gideri", "Sağlık Gideri", "Sağlık Gideri",
-            "Sağlık Gideri", "Sağlık Gideri", "Sağlık Gideri",
-            "Sağlık Gideri", "Sağlık Gideri", "Sağlık Gideri",
-            "Sağlık Gideri", "Sağlık Gideri", "Sağlık Gideri",
-            "Sağlık Gideri", "Sağlık Gideri",
-
-            "Diğer Giderler", "Bağış", "Bağış",
-            "Diğer Giderler", "Diğer Giderler", "Kişisel Bakım",
-            "Kişisel Bakım", "Fatura Gideri", "Vergi Gideri",
-            "Borç Ödemesi", "Birikim", "Çocuk Bakım",
-            "Ev Bakım Gideri", "Ev Bakım Gideri", "Ev Bakım Gideri",
-            "Diğer Giderler", "Diğer Giderler", "Eğlence/Spor",
-            "Eğlence/Spor", "Eğlence/Spor", "Bağış",
-            "Diğer Giderler", "Bağış", "Hediye",
-            "Hediye", "Banka Gideri", "Banka Gideri",
-            "Kargo Gideri", "Diğer Giderler",
-            "Eğitim Gideri", "Danışmanlık Gideri", "Danışmanlık Gideri"
-        ]
-        return descriptions, categories
-
-
-    def retrain_model(self, descriptions, categories):
-        """
-        Modeli verilen yeni verilerle eğitir ve kaydeder.
+        Kayıtlı modeli veya vektörleyiciyi yükler. Eğer yoksa veya yeniden eğitim istenirse,
+        veritabanından verileri çekip modeli eğitir ve kaydeder.
         Args:
-            descriptions (list): Eğitim için açıklama metinleri listesi.
-            categories (list): Açıklamalara karşılık gelen kategoriler listesi.
+            force_retrain (bool): True ise model ve vektörleyici yüklü olsa bile yeniden eğitir.
         """
-        if not descriptions or not categories:
-            print("Uyarı: Model eğitimi için yeterli veri yok. Eğitim atlandı.")
+        if self.model and self.vectorizer and not force_retrain:
+            print("Yapay zeka modeli ve vektörleyici zaten yüklü.")
             return
 
-        # Çok kritik: desc ve cat listelerinin uzunlukları burada hala farklıysa, model.fit hata verir.
-        # Bu problem genellikle descriptions veya categories listelerinden birinin boş kalmasından
-        # veya içindeki öğe sayısının diğerinden farklı olmasından kaynaklanır.
-        # Bu versiyonda `_load_or_retrain_model_with_user_data` içinde bu filtreleniyor olmalı.
-        if len(descriptions) != len(categories):
-            print(f"HATA: retrain_model'e gelen veri setinde tutarsızlık! Açıklamalar: {len(descriptions)}, Kategoriler: {len(categories)}")
-            print("Model eğitimi iptal edildi çünkü açıklama ve kategori sayıları uyuşmuyor.")
-            # Hata durumunda modelin atanmadığından emin ol
+        # Model ve vektörleyiciyi yüklemeyi dene
+        if os.path.exists(self.model_path) and os.path.exists(self.vectorizer_path) and not force_retrain:
+            try:
+                self.model = joblib.load(self.model_path)
+                self.vectorizer = joblib.load(self.vectorizer_path)
+                print("Kayıtlı yapay zeka modeli ve vektörleyici yüklendi.")
+                return
+            except Exception as e:
+                print(f"Hata: Kayıtlı model veya vektörleyici yüklenirken sorun oluştu: {e}. Yeniden eğitiliyor.")
+                self.model = None
+                self.vectorizer = None
+
+        # Model yoksa veya yüklenemediyse veya yeniden eğitim isteniyorsa eğit
+        print("Kayıtlı model bulunamadı veya yeniden eğitim isteniyor, model eğitiliyor.")
+        self._train_model()
+
+    def _train_model(self):
+        """
+        Veritabanından işlem verilerini çekerek kategorizasyon modelini eğitir.
+        """
+        # Sadece kategori ve açıklaması olan işlemleri çek
+        data = self.db_manager.get_all_transactions_for_ai_training(self.user_id)
+
+        if not data:
+            print("UYARI: Yapay zeka modeli eğitimi için veri bulunamadı. Lütfen işlem ekleyin.")
             self.model = None
             self.vectorizer = None
-            return # Eğitimi durdur
+            return
 
-        print(f"BİLGİ: Model {len(descriptions)} açıklama ile eğitiliyor...")
-        self.vectorizer = TfidfVectorizer(max_features=1000) # Özellik sayısını biraz artırdım
-        self.model = Pipeline([
-            ('vect', self.vectorizer),
-            ('clf', MultinomialNB()),
-        ])
+        # En az N (örneğin 10) farklı işlem veya yeterli çeşitlilikte veri olması önerilir
+        # Daha iyi bir çeşitlilik kontrolü için benzersiz kategori sayısına bakılabilir.
+        descriptions = [item[0] for item in data]
+        categories = [item[1] for item in data]
+
+        if len(descriptions) < 10 or len(set(categories)) < 2:
+            print(
+                "UYARI: Yapay zeka modeli eğitimi için yeterli veya çeşitli veri bulunamadı (en az 10 işlem ve 2 farklı kategori gerekli). Lütfen daha fazla işlem ekleyin.")
+            self.model = None
+            self.vectorizer = None
+            return
 
         try:
+            # Pipeline oluştur: TF-IDF vektörleyici ve Naive Bayes sınıflandırıcı
+            self.vectorizer = TfidfVectorizer(max_features=1000)  # En çok geçen 1000 kelimeyi kullan
+            self.model = Pipeline([
+                ('vectorizer', self.vectorizer),
+                ('classifier', MultinomialNB())
+            ])
+
+            # Modeli eğit
             self.model.fit(descriptions, categories)
+
+            # Modeli ve vektörleyiciyi kaydet
             joblib.dump(self.model, self.model_path)
             joblib.dump(self.vectorizer, self.vectorizer_path)
-            print("Yapay zeka modeli yeni verilerle eğitildi ve kaydedildi.")
+            print("Yapay zeka modeli başarıyla eğitildi ve kaydedildi.")
         except Exception as e:
-            # Buradaki hata yakalama, joblib.dump'tan değil, daha çok model.fit'ten kaynaklanmalı.
             print(f"Hata: Model eğitilirken veya kaydedilirken bir sorun oluştu: {e}")
-            # Hata durumunda modelin atanmadığından emin ol
             self.model = None
             self.vectorizer = None
-
 
     def predict_category(self, description):
         """
@@ -354,7 +113,7 @@ class AIPredictor:
         Returns:
             str or None: Tahmin edilen kategori adı veya model eğitilmemişse None.
         """
-        if self.model and self.vectorizer: # Model ve vektörleyici yüklü ve geçerli mi kontrol et
+        if self.model and self.vectorizer:  # Model ve vektörleyici yüklü ve geçerli mi kontrol et
             try:
                 # model zaten bir Pipeline, bu yüzden doğrudan predict çağrılabilir.
                 predicted_category = self.model.predict([description])[0]
@@ -369,4 +128,125 @@ class AIPredictor:
             print(
                 "UYARI: Yapay zeka modeli başlatılamadı veya eğitilmediği için tahmin yapılamıyor. Model veya vektörleyici eksik/bozuk.")
             return None
+
+    def analyze_and_suggest_savings(self):
+        """
+        Kullanıcının finansal verilerini analiz eder ve tasarruf önerileri sunar.
+        """
+        report = []
+        report.append("--- Tasarruf Analizi ve Finansal Sağlık Raporu ---\n")
+
+        # 1. Mevcut Bakiye ve Trend
+        balance = self.db_manager.get_balance(self.user_id)
+        report.append(f"Güncel Bakiye: {balance:.2f} TL\n")
+
+        monthly_trend_data = self.db_manager.get_monthly_balance_trend(self.user_id, num_months=6)  # Son 6 ay
+        if monthly_trend_data:
+            # Pandas ile işleme
+            import pandas as pd
+            df = pd.DataFrame(monthly_trend_data, columns=['date', 'type', 'amount'])
+            df['date'] = pd.to_datetime(df['date'])
+            df.set_index('date', inplace=True)
+
+            # Aylık net bakiyeyi hesapla
+            monthly_net = df.groupby(pd.Grouper(freq='M')).apply(
+                lambda x: (x[x['type'] == 'Gelir']['amount'].sum() - x[x['type'] == 'Gider']['amount'].sum()))
+
+            # Kümülatif bakiyeyi hesapla (önceki ayları da hesaba katarak)
+            # Bu, her ayın sonunda toplam bakiyenin nasıl değiştiğini gösterir.
+            all_transactions = self.db_manager.get_transactions(self.user_id)
+            if all_transactions:
+                df_all = pd.DataFrame(all_transactions,
+                                      columns=['id', 'date', 'type', 'amount', 'category', 'description'])
+                df_all['date'] = pd.to_datetime(df_all['date'])
+                df_all['signed_amount'] = df_all.apply(
+                    lambda row: row['amount'] if row['type'] == 'Gelir' else -row['amount'], axis=1)
+                df_all = df_all.sort_values('date')
+                df_all['cumulative_balance'] = df_all['signed_amount'].cumsum()
+
+                # Aylık kümülatif bakiye trendini daha doğru çekelim
+                monthly_cumulative_balance = df_all.set_index('date')['cumulative_balance'].resample(
+                    'M').last().ffill().fillna(0)
+
+                if len(monthly_cumulative_balance) > 1:
+                    first_month_balance = monthly_cumulative_balance.iloc[0]
+                    last_month_balance = monthly_cumulative_balance.iloc[-1]
+                    balance_change = last_month_balance - first_month_balance
+
+                    if balance_change > 0:
+                        report.append(
+                            f"Son {len(monthly_cumulative_balance)} ayda bakiye trendi genel olarak YÜKSELİYOR. ({balance_change:.2f} TL artış)\n")
+                    elif balance_change < 0:
+                        report.append(
+                            f"Son {len(monthly_cumulative_balance)} ayda bakiye trendi genel olarak DÜŞÜYOR. ({abs(balance_change):.2f} TL düşüş)\n")
+                    else:
+                        report.append(
+                            f"Son {len(monthly_cumulative_balance)} ayda bakiye trendi stabil. (Değişim yok)\n")
+                else:
+                    report.append("Yeterli bakiye trendi verisi bulunamadı (en az 2 aylık işlem gerekli).\n")
+            else:
+                report.append("Bakiye trendi analizi için işlem verisi bulunamadı.\n")
+        else:
+            report.append("Bakiye trendi verisi bulunamadı.\n")
+
+        # 2. Gelir ve Gider Analizi (Kategori Bazında)
+        report.append("--- Gelir ve Gider Genel Bakışı ---\n")
+        income_expense_data = self.db_manager.get_income_expenses_by_month_and_category(self.user_id, num_months=6)
+
+        total_income = sum(item[2] for item in income_expense_data if item[0] == 'Gelir')
+        total_expense = sum(item[2] for item in income_expense_data if item[0] == 'Gider')
+
+        report.append(f"Son 6 ayda Toplam Gelir: {total_income:.2f} TL")
+        report.append(f"Son 6 ayda Toplam Gider: {total_expense:.2f} TL\n")
+
+        if total_income > 0:
+            report.append("Gelir Kategorileri:\n")
+            for item in income_expense_data:
+                if item[0] == 'Gelir':
+                    report.append(f"  - {item[1] if item[1] else 'Belirtilmemiş'}: {item[2]:.2f} TL")
+            report.append("\n")
+
+        if total_expense > 0:
+            report.append("Gider Kategorileri:\n")
+            for item in income_expense_data:
+                if item[0] == 'Gider':
+                    report.append(f"  - {item[1] if item[1] else 'Belirtilmemiş'}: {item[2]:.2f} TL")
+            report.append("\n")
+
+        # 3. Tasarruf Hedefleri Durumu
+        report.append("--- Tasarruf Hedefleri Durumu ---\n")
+        goals = self.db_manager.get_savings_goals(self.user_id)
+        if goals:
+            for goal_id, name, target, current, target_date, description, status in goals:
+                remaining = target - current
+                if remaining <= 0:
+                    report.append(f"  - '{name}': Hedef Tamamlandı! ({target:.2f} TL)")
+                else:
+                    report.append(
+                        f"  - '{name}': {current:.2f} / {target:.2f} TL birikti. Kalan: {remaining:.2f} TL. Hedef Tarihi: {target_date}. Durum: {status}")
+            report.append("\n")
+        else:
+            report.append("Tanımlanmış bir tasarruf hedefi bulunmamaktadır.\n")
+            report.append("Tasarruf hedefleri belirlemek finansal sağlığınızı iyileştirmenize yardımcı olabilir.")
+
+        # 4. Genel Öneriler
+        report.append("--- Genel Tasarruf Önerileri ---\n")
+        if balance < 0:
+            report.append("- Acilen giderlerinizi gözden geçirin ve gereksiz harcamaları kısın.")
+            report.append("- Ek gelir kaynakları arayarak bakiyenizi dengelemeye çalışın.\n")
+        elif total_expense > total_income:
+            report.append("- Gelirleriniz giderlerinizi karşılamakta zorlanıyor. Detaylı harcama analizi yapın.")
+            report.append("- Yüksek gider kategorilerini (örn: yeme-içme, eğlence) belirleyip azaltmaya çalışın.\n")
+        elif total_income > total_expense and total_expense > 0:
+            report.append("- Düzenli olarak tasarruf hedefleri belirleyin ve bu hedeflere bağlı kalın.")
+            report.append("- Gereksiz abonelikleri iptal edin veya daha uygun alternatiflerini bulun.")
+            report.append("- Büyük harcamalarınız için önceden bütçe ayırın.\n")
+        else:
+            report.append("- Finansal durumunuz iyi görünüyor! Mevcut iyi alışkanlıklarınıza devam edin.")
+            report.append("- Yatırım seçeneklerini araştırarak birikimlerinizi değerlendirebilirsiniz.")
+            report.append("- Acil durum fonunuzun yeterli olduğundan emin olun.\n")
+
+        report.append("Bu rapor bilgilendirme amaçlıdır. Detaylı finansal danışmanlık için bir uzmana başvurun.")
+
+        return "\n".join(report)
 

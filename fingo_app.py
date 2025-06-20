@@ -9,16 +9,23 @@ from tkcalendar import DateEntry
 import json
 import os
 import sys
-import pandas as pd  # Pandas kütüphanesini import et
+import pandas as pd
 
 # Gerekli modüllerin import edilmesi
 from database_manager import DatabaseManager
-from pdf_generator import PDFGenerator, GLOBAL_REPORTLAB_FONT_NAME
+# pdf_generator'dan hem sınıfı hem de font adını ve register fonksiyonunu import et
+from pdf_generator import PDFGenerator, GLOBAL_REPORTLAB_FONT_NAME, _register_pdf_font
 from ai_predictor import AIPredictor
+from utils import validate_numeric_input  # utils'den fonksiyonu doğrudan import et
 
 # Matplotlib için Türkçe font ayarı
+# Bu ayar, `_register_pdf_font` içindeki GLOBAL_REPORTLAB_FONT_NAME'i kullanır.
 plt.rcParams['font.sans-serif'] = [GLOBAL_REPORTLAB_FONT_NAME, 'DejaVu Sans']
 plt.rcParams['axes.unicode_minus'] = False
+
+# Uygulama başlatıldığında fontu ReportLab'a kaydet
+# Font dosyasının uygulama ile aynı dizinde olduğundan emin olun (örn: ArialCustom.ttf).
+_register_pdf_font(f"{GLOBAL_REPORTLAB_FONT_NAME}.ttf")
 
 
 class GelirGiderUygulamasi:
@@ -48,16 +55,16 @@ class GelirGiderUygulamasi:
         self.fig_balance = None
         self.canvas_balance = None
 
+        # PDFGenerator'ı db_manager ve user_id ile başlat
         self.pdf_generator = PDFGenerator(db_manager=self.db_manager, user_id=self.kullanici_id)
         self.ai_predictor = AIPredictor(db_manager=self.db_manager, user_id=self.kullanici_id)
 
         # validate_numeric_input fonksiyonunu bir kere kaydet
-        self.validate_numeric_cmd = self.root.register(self._validate_numeric_input)
+        self.validate_numeric_cmd = self.root.register(self._validate_numeric_input_wrapper)
 
         self._create_main_ui()  # Yeni ana UI oluşturma metodunu çağırıyoruz
 
         # AI modelini UI oluşturulduktan sonra yükle/eğit
-        # Çünkü UI elemanlarına (örneğin savings_analysis_text) ihtiyacı olabilir.
         self.ai_predictor.load_or_train_model()
 
         # İlk sekmelerin yüklenmesi ve veri çekimi notebook sekme değişim olayına bağlandı
@@ -68,6 +75,10 @@ class GelirGiderUygulamasi:
 
         print(
             f"DEBUG: GelirGiderUygulamasi başlatıldı. Kullanıcı ID: {self.kullanici_id}, Kullanıcı Adı: {self.username}")
+
+    def _validate_numeric_input_wrapper(self, P):
+        """utils.py'deki validate_numeric_input fonksiyonunu sarmalayan wrapper."""
+        return validate_numeric_input(P)
 
     def on_closing(self):
         """Uygulama kapatılırken veritabanı bağlantısını kapatır."""
@@ -102,7 +113,7 @@ class GelirGiderUygulamasi:
         self.customer_management_tab_frame = ttk.Frame(self.notebook)
         self.product_management_tab_frame = ttk.Frame(self.notebook)
         self.category_management_tab_frame = ttk.Frame(self.notebook)
-        self.tax_report_tab_frame = ttk.Frame(self.notebook)
+        # self.tax_report_tab_frame = ttk.Frame(self.notebook) # Kaldırıldı, entegre edildi
 
         self.notebook.add(self.transactions_tab_frame, text="Ana İşlemler")
         self.notebook.add(self.reports_analysis_tab_frame, text="Gelişmiş Araçlar & Raporlar")
@@ -112,7 +123,7 @@ class GelirGiderUygulamasi:
         self.notebook.add(self.customer_management_tab_frame, text="Müşteri Yönetimi")
         self.notebook.add(self.product_management_tab_frame, text="Ürün/Hizmet Yönetimi")
         self.notebook.add(self.category_management_tab_frame, text="Kategori Yönetimi")
-        self.notebook.add(self.tax_report_tab_frame, text="Vergi Raporu")
+        # self.notebook.add(self.tax_report_tab_frame, text="Vergi Raporu") # Kaldırıldı
 
         # Her sekmeye ilgili UI'ları oluştur
         self._create_transactions_ui(self.transactions_tab_frame)
@@ -123,7 +134,7 @@ class GelirGiderUygulamasi:
         self._create_customer_management_ui(self.customer_management_tab_frame)
         self._create_product_management_ui(self.product_management_tab_frame)
         self._create_category_management_ui(self.category_management_tab_frame)
-        self._create_tax_report_ui(self.tax_report_tab_frame)
+        # self._create_tax_report_ui(self.tax_report_tab_frame) # Kaldırıldı
 
         self.guncelle_bakiye()  # Bakiye bilgisini güncelle (istersen bu bilgiyi de ana ekrana veya bir sekmeye taşıyabilirsin)
 
@@ -140,10 +151,6 @@ class GelirGiderUygulamasi:
 
     def _on_tab_change(self, event):
         """Sekme değiştiğinde ilgili içeriği yükler."""
-        self._load_current_tab_content()
-
-    def _load_current_tab_content(self):
-        """Aktif sekmenin içeriğini yükler/günceller."""
         selected_tab = self.notebook.tab(self.notebook.select(), "text")
         print(f"DEBUG: Selected tab changed to: {selected_tab}")
 
@@ -153,8 +160,8 @@ class GelirGiderUygulamasi:
             self.guncelle_kategori_listesi()  # İşlem ekranı için kategori listesini güncelle
             self.on_transaction_type_selected()  # Varsayılan işlem tipi seçildiğinde kategorileri yükle
         elif selected_tab == "Gelişmiş Araçlar & Raporlar":
-            self.render_charts()
-            self.tasarruf_analizi_yap()
+            # Grafikler artık butonlarla ayrı pencerelerde açılacak, vergi raporu da butonla tetiklenecek
+            pass
         elif selected_tab == "Fatura & Teklifler":
             self.listele_faturalar_teklifler()
             self.update_customer_combobox()  # Müşteri listesini güncelle
@@ -172,8 +179,6 @@ class GelirGiderUygulamasi:
             self.listele_urunler()
         elif selected_tab == "Kategori Yönetimi":
             self.listele_kategoriler()
-        elif selected_tab == "Vergi Raporu":
-            self.generate_tax_report()
 
         self.guncelle_bakiye()  # Bakiye bilgisini her sekme değişiminde güncelle
 
@@ -219,7 +224,6 @@ class GelirGiderUygulamasi:
         """Mevcut bakiyeyi veritabanından alıp günceller."""
         bakiye = self.db_manager.get_balance(self.kullanici_id)
         # Bakiye artık sol menüde değil, uygun bir yere yerleştirilebilir (örn: üst bar)
-        # Şimdilik kullanıcıya özel etikette göstermeye devam edelim.
         # self.balance_label.config(text=f"Bakiye: {bakiye:.2f} TL")
         # if bakiye < 0:
         #     self.balance_label.config(foreground="red")
@@ -227,11 +231,6 @@ class GelirGiderUygulamasi:
         #     self.balance_label.config(foreground="green")
 
     # --- Ekran Geçiş Fonksiyonları (Artık sekme seçimi yapacak) ---
-    # Bu fonksiyonlar artık doğrudan çağrılmayacak, Notebook sekme seçimi yapacak.
-    # Yine de menü butonları olsaydı bu şekilde kullanılırdı.
-    # Bu fonksiyonlar _on_tab_change metoduyla otomatik çağrıldığı için doğrudan arayüzde bir butona bağlanmaları gerekmiyor.
-    # Eğer doğrudan bir butona bağlanacak olsaydı, self.notebook.select(frame_obj) yapılırdı.
-    # Ancak burada sekmeler arası geçişi yönetmek için _on_tab_change yeterli.
     def show_transactions_screen(self):
         self.notebook.select(self.transactions_tab_frame)
         self.listele_islemler()
@@ -258,16 +257,10 @@ class GelirGiderUygulamasi:
 
     def show_reports_analysis_screen(self):
         self.notebook.select(self.reports_analysis_tab_frame)
-        self.render_charts()
-        self.tasarruf_analizi_yap()
 
     def show_category_management_screen(self):
         self.notebook.select(self.category_management_tab_frame)
         self.listele_kategoriler()
-
-    def show_tax_report_screen(self):
-        self.notebook.select(self.tax_report_tab_frame)
-        self.generate_tax_report()
 
     # --- Kategori Yönetimi UI ve Fonksiyonları ---
     def _create_category_management_ui(self, parent_frame):
@@ -311,9 +304,6 @@ class GelirGiderUygulamasi:
         self.category_tree.pack(fill="both", expand=True, pady=10)
         self.category_tree.bind("<ButtonRelease-1>", self.kategori_sec)
 
-        # Bu kısım artık _create_main_ui içinde yapıldığı için burada çağırmaya gerek yok
-        # self.listele_kategoriler()  # Başlangıçta kategorileri listele
-
     def kategori_ekle(self):
         category_name = self.category_name_entry.get().strip()
         category_type = self.category_type_combobox.get()
@@ -329,8 +319,8 @@ class GelirGiderUygulamasi:
             self.show_message("Başarılı", "Kategori başarıyla eklendi.")
             self.temizle_kategori_formu()
             self.listele_kategoriler()
-            self.guncelle_kategori_listesi()  # Diğer ekranlardaki kategori comboboxlarını güncelle
-            self.ai_predictor.load_or_train_model(force_retrain=True)  # Yeni kategori eklenince AI'ı tekrar eğit
+            self.guncelle_kategori_listesi()
+            self.ai_predictor.load_or_train_model(force_retrain=True)
         else:
             self.show_error("Hata", "Kategori eklenirken bir sorun oluştu veya bu kategori adı zaten mevcut.")
 
@@ -339,14 +329,12 @@ class GelirGiderUygulamasi:
             self.show_error("Hata", "Lütfen silmek istediğiniz kategoriyi seçin.")
             return
 
-        # Kategori adını al
         selected_item = self.category_tree.selection()
         if not selected_item:
             self.show_error("Hata", "Lütfen silmek istediğiniz kategoriyi seçin.")
             return
         category_name_to_delete = self.category_tree.item(selected_item, 'values')[1]
 
-        # Bu kategoriye ait işlem olup olmadığını kontrol et
         transaction_count = self.db_manager.count_transactions_by_category(category_name_to_delete, self.kullanici_id)
 
         if transaction_count > 0:
@@ -358,7 +346,6 @@ class GelirGiderUygulamasi:
             if not confirm:
                 return
 
-            # İşlemlerin kategorisini NULL yap
             if not self.db_manager.update_transactions_category_to_null(category_name_to_delete, self.kullanici_id):
                 self.show_error("Hata", "İşlemlerin kategorisi güncellenirken bir sorun oluştu.")
                 return
@@ -368,9 +355,9 @@ class GelirGiderUygulamasi:
             self.selected_category_id = None
             self.temizle_kategori_formu()
             self.listele_kategoriler()
-            self.guncelle_kategori_listesi()  # Diğer ekranlardaki kategori comboboxlarını güncelle
-            self.listele_islemler()  # İşlem listesini yenile (NULL olanlar görünecek)
-            self.ai_predictor.load_or_train_model(force_retrain=True)  # Kategori değiştiği için AI'ı tekrar eğit
+            self.guncelle_kategori_listesi()
+            self.listele_islemler()
+            self.ai_predictor.load_or_train_model(force_retrain=True)
         else:
             self.show_error("Hata", "Kategori silinirken bir sorun oluştu.")
 
@@ -389,9 +376,8 @@ class GelirGiderUygulamasi:
 
     def listele_kategoriler(self):
         """Kategorileri Treeview'de listeler."""
-        # Check if category_tree exists before configuring it
         if not (hasattr(self, 'category_tree') and self.category_tree.winfo_exists()):
-            return  # If treeview is not yet created, just return
+            return
 
         for item in self.category_tree.get_children():
             self.category_tree.delete(item)
@@ -410,8 +396,7 @@ class GelirGiderUygulamasi:
 
     def guncelle_kategori_listesi(self):
         """İşlem ekleme/düzenleme ekranındaki kategori combobox'ını günceller."""
-        categories = self.db_manager.get_all_categories(self.kullanici_id)  # Sadece isimleri çeken metot
-        # Eğer bu comboboxlar oluşturulmuşsa güncelle
+        categories = self.db_manager.get_all_categories(self.kullanici_id)
         if hasattr(self, 'transaction_category_combobox') and self.transaction_category_combobox.winfo_exists():
             self.transaction_category_combobox['values'] = categories
         if hasattr(self, 'recurring_category_combobox') and self.recurring_category_combobox.winfo_exists():
@@ -423,7 +408,7 @@ class GelirGiderUygulamasi:
     def _create_transactions_ui(self, parent_frame):
         """Gelir/Gider İşlemleri arayüzünü oluşturur (Ana İşlemler sekmesi)."""
         transactions_frame = ttk.LabelFrame(parent_frame, text="Yeni İşlem Ekle / Düzenle", padding="15")
-        transactions_frame.pack(fill="x", pady=10)  # expand=False, sadece genişlesin
+        transactions_frame.pack(fill="x", pady=10)
 
         # Giriş Alanları
         input_grid_frame = ttk.Frame(transactions_frame)
@@ -434,7 +419,7 @@ class GelirGiderUygulamasi:
         self.transaction_type_combobox = ttk.Combobox(input_grid_frame, values=["Gelir", "Gider"], state="readonly",
                                                       width=20)
         self.transaction_type_combobox.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
-        self.transaction_type_combobox.set("Gider")  # Varsayılan değer
+        self.transaction_type_combobox.set("Gider")
         self.transaction_type_combobox.bind("<<ComboboxSelected>>", self.on_transaction_type_selected)
 
         # Miktar
@@ -447,12 +432,12 @@ class GelirGiderUygulamasi:
         ttk.Label(input_grid_frame, text="Kategori:").grid(row=2, column=0, padx=5, pady=5, sticky="w")
         self.transaction_category_combobox = ttk.Combobox(input_grid_frame, state="readonly", width=20)
         self.transaction_category_combobox.grid(row=2, column=1, padx=5, pady=5, sticky="ew")
-        self.guncelle_kategori_listesi()  # Kategori listesini yükle
+        self.guncelle_kategori_listesi()
 
         # Açıklama
         ttk.Label(input_grid_frame, text="Açıklama:").grid(row=3, column=0, padx=5, pady=5, sticky="w")
         self.transaction_description_entry = ttk.Entry(input_grid_frame, width=40)
-        self.transaction_description_entry.grid(row=3, column=1, padx=5, pady=5, sticky="ew", columnspan=2)  # Daha uzun
+        self.transaction_description_entry.grid(row=3, column=1, padx=5, pady=5, sticky="ew", columnspan=2)
 
         # Tarih
         ttk.Label(input_grid_frame, text="Tarih:").grid(row=4, column=0, padx=5, pady=5, sticky="w")
@@ -460,9 +445,8 @@ class GelirGiderUygulamasi:
                                                 foreground='white', borderwidth=2, locale='tr_TR')
         self.transaction_date_entry.grid(row=4, column=1, padx=5, pady=5, sticky="ew")
 
-        # Grid ayarlamaları
-        input_grid_frame.grid_columnconfigure(1, weight=1)  # Entry alanlarının genişlemesini sağla
-        input_grid_frame.grid_columnconfigure(2, weight=1)  # Açıklama için ekstra genişlik
+        input_grid_frame.grid_columnconfigure(1, weight=1)
+        input_grid_frame.grid_columnconfigure(2, weight=1)
 
         # Butonlar (Kaydet, Güncelle, Temizle, Sil)
         button_frame = ttk.Frame(transactions_frame)
@@ -477,7 +461,7 @@ class GelirGiderUygulamasi:
 
         # Filtreleme ve Arama Çerçevesi
         filter_frame = ttk.LabelFrame(parent_frame, text="Filtreleme ve Arama", padding="15")
-        filter_frame.pack(fill="x", pady=10)  # expand=False, sadece genişlesin
+        filter_frame.pack(fill="x", pady=10)
 
         filter_grid_frame = ttk.Frame(filter_frame)
         filter_grid_frame.pack(pady=10, fill="x", padx=5)
@@ -508,7 +492,7 @@ class GelirGiderUygulamasi:
         self.filter_start_date_entry = DateEntry(filter_grid_frame, width=12, background='darkblue', foreground='white',
                                                  borderwidth=2, locale='tr_TR')
         self.filter_start_date_entry.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
-        ttk.Label(filter_grid_frame, text="-").grid(row=1, column=2, padx=2, pady=5)  # Ayırıcı
+        ttk.Label(filter_grid_frame, text="-").grid(row=1, column=2, padx=2, pady=5)
         self.filter_end_date_entry = DateEntry(filter_grid_frame, width=12, background='darkblue', foreground='white',
                                                borderwidth=2, locale='tr_TR')
         self.filter_end_date_entry.grid(row=1, column=3, padx=5, pady=5, sticky="ew")
@@ -523,15 +507,16 @@ class GelirGiderUygulamasi:
         filter_grid_frame.grid_columnconfigure(5, weight=1)
 
         # İşlem Listesi (Treeview)
+        # Note: self.tree yerine self.transactions_tree kullanılıyor
         self.transactions_tree = ttk.Treeview(parent_frame,
                                               columns=("ID", "Tarih", "Tip", "Miktar", "Kategori", "Açıklama"),
                                               show="headings")
         self.transactions_tree.heading("ID", text="ID")
         self.transactions_tree.heading("Tarih", text="Tarih")
-        self.transactions_tree.heading("Tip", text="Tür")  # Resimdeki "Tür"e göre düzenlendi
-        self.transactions_tree.heading("Miktar", text="Miktar (₺)")  # Resimdeki "Miktar (₺)"'e göre düzenlendi
+        self.transactions_tree.heading("Tip", text="Tür")
+        self.transactions_tree.heading("Miktar", text="Miktar (₺)")
         self.transactions_tree.heading("Kategori", text="Kategori")
-        self.transactions_tree.heading("Açıklama", text="Açıklama")  # Resimdeki "Açıklama/Arama" değil "Açıklama"
+        self.transactions_tree.heading("Açıklama", text="Açıklama")
 
         self.transactions_tree.column("ID", width=50, stretch=tk.NO)
         self.transactions_tree.column("Tarih", width=100, stretch=tk.NO)
@@ -543,10 +528,14 @@ class GelirGiderUygulamasi:
         self.transactions_tree.pack(fill="both", expand=True, pady=10, padx=10)
         self.transactions_tree.bind("<ButtonRelease-1>", self.islem_sec)
 
-    def _validate_numeric_input(self, P):
-        """Sayısal giriş doğrulaması için utils'den gelen fonksiyonu kullanır."""
-        from utils import validate_numeric_input as util_validate_numeric_input
-        return util_validate_numeric_input(P)
+        # Export Buttons Frame
+        export_buttons_frame = ttk.Frame(parent_frame)
+        export_buttons_frame.pack(pady=10)
+
+        ttk.Button(export_buttons_frame, text="PDF Olarak Dışa Aktar", command=self.export_transactions_to_pdf).pack(
+            side="left", padx=5)
+        ttk.Button(export_buttons_frame, text="Excel Olarak Dışa Aktar",
+                   command=self.export_transactions_to_excel).pack(side="left", padx=5)
 
     def on_transaction_type_selected(self, event=None):
         """İşlem tipi değiştiğinde kategori seçeneklerini günceller."""
@@ -558,7 +547,6 @@ class GelirGiderUygulamasi:
             if cat_type == selected_type or cat_type == "Genel":
                 filtered_categories.append(cat_name)
 
-        # Check if the combobox exists before trying to configure it
         if hasattr(self, 'transaction_category_combobox') and self.transaction_category_combobox.winfo_exists():
             self.transaction_category_combobox['values'] = filtered_categories
             if filtered_categories:
@@ -598,8 +586,7 @@ class GelirGiderUygulamasi:
             self.temizle_islem_formu()
             self.listele_islemler()
             self.guncelle_bakiye()
-            self.ai_predictor.load_or_train_model(force_retrain=True)  # Yeni işlem eklenince AI'ı tekrar eğit
-            self.render_charts()  # Grafiklerin güncellenmesi için çağır
+            self.ai_predictor.load_or_train_model(force_retrain=True)
         else:
             self.show_error("Hata", "İşlem eklenirken bir sorun oluştu.")
 
@@ -639,8 +626,7 @@ class GelirGiderUygulamasi:
             self.temizle_islem_formu()
             self.listele_islemler()
             self.guncelle_bakiye()
-            self.ai_predictor.load_or_train_model(force_retrain=True)  # İşlem güncellenince AI'ı tekrar eğit
-            self.render_charts()  # Grafiklerin güncellenmesi için çağır
+            self.ai_predictor.load_or_train_model(force_retrain=True)
         else:
             self.show_error("Hata", "İşlem güncellenirken bir sorun oluştu.")
 
@@ -655,8 +641,7 @@ class GelirGiderUygulamasi:
                 self.temizle_islem_formu()
                 self.listele_islemler()
                 self.guncelle_bakiye()
-                self.ai_predictor.load_or_train_model(force_retrain=True)  # İşlem silinince AI'ı tekrar eğit
-                self.render_charts()  # Grafiklerin güncellenmesi için çağır
+                self.ai_predictor.load_or_train_model(force_retrain=True)
             else:
                 self.show_error("Hata", "İşlem silinirken bir sorun oluştu.")
 
@@ -665,14 +650,12 @@ class GelirGiderUygulamasi:
         if selected_item:
             values = self.transactions_tree.item(selected_item, 'values')
             self.selected_item_id = values[0]
-            # tkcalendar DateEntry set_date için datetime objesi bekler
             if hasattr(self, 'transaction_date_entry') and self.transaction_date_entry.winfo_exists():
                 try:
-                    # Tarih veritabanından YYYY-MM-DD olarak gelir
                     self.transaction_date_entry.set_date(datetime.strptime(values[1], '%Y-%m-%d'))
                 except ValueError:
                     self.show_error("Hata", "Veritabanından okunan tarih formatı geçersiz.")
-                    self.transaction_date_entry.set_date(datetime.now())  # Varsayılan olarak bugünü ayarla
+                    self.transaction_date_entry.set_date(datetime.now())
             if hasattr(self, 'transaction_type_combobox') and self.transaction_type_combobox.winfo_exists():
                 self.transaction_type_combobox.set(values[2])
             if hasattr(self, 'transaction_amount_entry') and self.transaction_amount_entry.winfo_exists():
@@ -688,7 +671,7 @@ class GelirGiderUygulamasi:
 
     def listele_islemler(self, event=None):
         if not (hasattr(self, 'transactions_tree') and self.transactions_tree.winfo_exists()):
-            return  # If treeview is not yet created, just return
+            return
 
         for item in self.transactions_tree.get_children():
             self.transactions_tree.delete(item)
@@ -696,7 +679,6 @@ class GelirGiderUygulamasi:
         type_filter = self.filter_type_combobox.get()
         category_filter = self.filter_category_combobox.get()
 
-        # Filtre tarihlerini ayrıştır
         start_date_str = self.filter_start_date_entry.get()
         end_date_str = self.filter_end_date_entry.get()
 
@@ -716,8 +698,8 @@ class GelirGiderUygulamasi:
             self.kullanici_id,
             type_filter if type_filter != "Tümü" else None,
             category_filter if category_filter != "Tümü" else None,
-            start_date_db_format,  # Düzenlenmiş tarih formatını kullan
-            end_date_db_format,  # Düzenlenmiş tarih formatını kullan
+            start_date_db_format,
+            end_date_db_format,
             search_term
         )
 
@@ -729,7 +711,7 @@ class GelirGiderUygulamasi:
             self.transaction_date_entry.set_date(datetime.now())
         if hasattr(self, 'transaction_type_combobox') and self.transaction_type_combobox.winfo_exists():
             self.transaction_type_combobox.set("Gider")
-            self.on_transaction_type_selected()  # Tipi "Gider" olarak ayarladıktan sonra kategorileri güncelle
+            self.on_transaction_type_selected()
         if hasattr(self, 'transaction_amount_entry') and self.transaction_amount_entry.winfo_exists():
             self.transaction_amount_entry.delete(0, tk.END)
         if hasattr(self, 'transaction_category_combobox') and self.transaction_category_combobox.winfo_exists():
@@ -738,14 +720,11 @@ class GelirGiderUygulamasi:
             self.transaction_description_entry.delete(0, tk.END)
         self.selected_item_id = None
 
-        # Filtreleri de temizle
         if hasattr(self, 'filter_type_combobox') and self.filter_type_combobox.winfo_exists():
             self.filter_type_combobox.set("Tümü")
         if hasattr(self, 'filter_category_combobox') and self.filter_category_combobox.winfo_exists():
             self.filter_category_combobox.set("Tümü")
-        # Tarih girişlerini de temizle veya varsayılan tarihe ayarla
         if hasattr(self, 'filter_start_date_entry') and self.filter_start_date_entry.winfo_exists():
-            # Varsayılan olarak son bir ayı veya başlangıcı ayarlayabiliriz
             self.filter_start_date_entry.set_date(datetime.now() - timedelta(days=30))
         if hasattr(self, 'filter_end_date_entry') and self.filter_end_date_entry.winfo_exists():
             self.filter_end_date_entry.set_date(datetime.now())
@@ -771,7 +750,7 @@ class GelirGiderUygulamasi:
                                "Yapay zeka modelini yeniden eğitmek istediğinizden emin misiniz? Bu işlem biraz zaman alabilir."):
             self.ai_predictor.load_or_train_model(force_retrain=True)
             self.show_message("Eğitim Tamamlandı", "Yapay zeka modeli başarıyla yeniden eğitildi!")
-            self.guncelle_kategori_listesi()  # Kategori listesi değişebileceği için güncelle
+            self.guncelle_kategori_listesi()
 
     # --- Tekrarlayan İşlemler UI ve Fonksiyonları ---
     def _create_recurring_transactions_ui(self, parent_frame):
@@ -801,7 +780,7 @@ class GelirGiderUygulamasi:
         ttk.Label(input_frame, text="Kategori:").grid(row=3, column=0, padx=5, pady=5, sticky="w")
         self.recurring_category_combobox = ttk.Combobox(input_frame, state="readonly")
         self.recurring_category_combobox.grid(row=3, column=1, padx=5, pady=5, sticky="ew")
-        self.guncelle_kategori_listesi()  # Kategori listesini yükle
+        self.guncelle_kategori_listesi()
 
         ttk.Label(input_frame, text="Başlangıç Tarihi:").grid(row=4, column=0, padx=5, pady=5, sticky="w")
         self.recurring_start_date_entry = DateEntry(input_frame, width=12, background='darkblue', foreground='white',
@@ -812,7 +791,7 @@ class GelirGiderUygulamasi:
         self.recurring_frequency_combobox = ttk.Combobox(input_frame, values=["Günlük", "Haftalık", "Aylık", "Yıllık"],
                                                          state="readonly")
         self.recurring_frequency_combobox.grid(row=5, column=1, padx=5, pady=5, sticky="ew")
-        self.recurring_frequency_combobox.set("Aylık")  # Varsayılan
+        self.recurring_frequency_combobox.set("Aylık")
 
         # Butonlar
         button_frame = ttk.Frame(recurring_frame)
@@ -870,7 +849,6 @@ class GelirGiderUygulamasi:
             if cat_type == selected_type or cat_type == "Genel":
                 filtered_categories.append(cat_name)
 
-        # Check if the combobox exists before trying to configure it
         if hasattr(self, 'recurring_category_combobox') and self.recurring_category_combobox.winfo_exists():
             self.recurring_category_combobox['values'] = filtered_categories
             if filtered_categories:
@@ -905,7 +883,6 @@ class GelirGiderUygulamasi:
             self.show_error("Hata", str(e))
             return
 
-        # İlk eklendiğinde son üretilen tarih başlangıç tarihi ile aynı olsun
         last_generated_date_db_format = start_date_db_format
 
         if self.db_manager.insert_recurring_transaction(type, amount, category if category else None, description,
@@ -992,13 +969,16 @@ class GelirGiderUygulamasi:
                     self.show_error("Hata", "Veritabanından okunan başlangıç tarih formatı geçersiz.")
                     self.recurring_start_date_entry.set_date(datetime.now())
             if hasattr(self, 'recurring_frequency_combobox') and self.recurring_frequency_combobox.winfo_exists():
-                self.recurring_frequency_combobox.set(values[6])
+                if values[6]:
+                    self.recurring_frequency_combobox.set(values[6])
+                else:
+                    self.recurring_frequency_combobox.set("Aylık")
         else:
             self.temizle_tekrarlayan_islem_formu()
 
     def listele_tekrarlayan_islemler(self):
         if not (hasattr(self, 'recurring_tree') and self.recurring_tree.winfo_exists()):
-            return  # If treeview is not yet created, just return
+            return
 
         for item in self.recurring_tree.get_children():
             self.recurring_tree.delete(item)
@@ -1016,7 +996,7 @@ class GelirGiderUygulamasi:
             self.recurring_amount_entry.delete(0, tk.END)
         if hasattr(self, 'recurring_type_combobox') and self.recurring_type_combobox.winfo_exists():
             self.recurring_type_combobox.set("Gider")
-            self.on_recurring_type_selected()  # Tipi "Gider" olarak ayarladıktan sonra kategorileri güncelle
+            self.on_recurring_type_selected()
         if hasattr(self, 'recurring_category_combobox') and self.recurring_category_combobox.winfo_exists():
             self.recurring_category_combobox.set("")
         if hasattr(self, 'recurring_start_date_entry') and self.recurring_start_date_entry.winfo_exists():
@@ -1036,23 +1016,17 @@ class GelirGiderUygulamasi:
         generated_count = 0
 
         for rec_id, type, amount, category, description, start_date_str, frequency, last_generated_date_str in recurring_transactions:
-            # Tarihleri datetime.date objesine çevir
             start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
             last_generated_date = datetime.strptime(last_generated_date_str,
                                                     '%Y-%m-%d').date() if last_generated_date_str else start_date
 
             next_due_date = last_generated_date
 
-            # İlk işlem henüz kaydedilmemişse (last_generated_date == start_date ve bugünden küçükse)
-            # veya last_generated_date henüz güncellenmemişse, başlangıç tarihinden itibaren kontrol et
-            if last_generated_date < start_date:  # Bu durum olmamalı ama önlem alalım
+            if last_generated_date < start_date:
                 next_due_date = start_date
 
-            # Gelecekteki ilk uygun tarihi bul
             while next_due_date <= today:
-                # next_due_date, last_generated_date'den büyük veya eşit olmalı
                 if next_due_date > last_generated_date:
-                    # Ana işlemlere ekle
                     if self.db_manager.insert_transaction(type, amount, category, description,
                                                           next_due_date.strftime('%Y-%m-%d'), self.kullanici_id):
                         generated_count += 1
@@ -1061,21 +1035,17 @@ class GelirGiderUygulamasi:
                         print(
                             f"Hata: Tekrarlayan işlem '{description}' ({next_due_date.strftime('%Y-%m-%d')}) eklenirken sorun oluştu.")
 
-                    # İşlem eklendikten sonra last_generated_date'i güncelle
                     self.db_manager.update_recurring_transaction_last_generated_date(rec_id,
                                                                                      next_due_date.strftime('%Y-%m-%d'))
-                    self.guncelle_bakiye()  # Bakiye değiştiği için güncelle
-                    self.listele_islemler()  # İşlem listesini yenile
-                    self.ai_predictor.load_or_train_model(force_retrain=True)  # Yeni işlem eklenince AI'ı tekrar eğit
-                    self.render_charts()  # Grafiklerin güncellenmesi için çağır
+                    self.guncelle_bakiye()
+                    self.listele_islemler()
+                    self.ai_predictor.load_or_train_model(force_retrain=True)
 
-                # Bir sonraki tekrarlama tarihini hesapla
                 if frequency == "Günlük":
                     next_due_date += timedelta(days=1)
                 elif frequency == "Haftalık":
                     next_due_date += timedelta(weeks=1)
                 elif frequency == "Aylık":
-                    # Ay atlamalarında gün sayısını doğru hesaplamak için
                     current_month = next_due_date.month
                     current_year = next_due_date.year
                     next_month = current_month + 1
@@ -1086,8 +1056,7 @@ class GelirGiderUygulamasi:
 
                     try:
                         next_due_date = next_due_date.replace(year=next_year, month=next_month)
-                    except ValueError:  # Örneğin Şubat ayında 31. gün olmaz
-                        # Ayın son gününe ayarla
+                    except ValueError:
                         last_day_of_next_month = (datetime(next_year, next_month + 1, 1) - timedelta(
                             days=1)).date() if next_month < 12 else (
                                     datetime(next_year + 1, 1, 1) - timedelta(days=1)).date()
@@ -1096,12 +1065,12 @@ class GelirGiderUygulamasi:
                 elif frequency == "Yıllık":
                     next_due_date = next_due_date.replace(year=next_due_date.year + 1)
                 else:
-                    break  # Geçersiz sıklık
+                    break
 
         if generated_count > 0:
             self.show_message("Tekrarlayan İşlemler",
                               f"{generated_count} adet tekrarlayan işlem başarıyla oluşturuldu.")
-            self.listele_tekrarlayan_islemler()  # Son üretilen tarihleri yansıtmak için listeyi yenile
+            self.listele_tekrarlayan_islemler()
         else:
             print("Kontrol tamamlandı. Yeni tekrarlayan işlem oluşturulmadı.")
 
@@ -1128,7 +1097,7 @@ class GelirGiderUygulamasi:
         self.goal_current_amount_entry = ttk.Entry(input_frame, validate="key",
                                                    validatecommand=(self.validate_numeric_cmd, '%P'))
         self.goal_current_amount_entry.grid(row=2, column=1, padx=5, pady=5, sticky="ew")
-        self.goal_current_amount_entry.insert(0, "0.0")  # Varsayılan 0
+        self.goal_current_amount_entry.insert(0, "0.0")
 
         ttk.Label(input_frame, text="Hedef Tarihi:").grid(row=3, column=0, padx=5, pady=5, sticky="w")
         self.goal_target_date_entry = DateEntry(input_frame, width=12, background='darkblue', foreground='white',
@@ -1143,7 +1112,7 @@ class GelirGiderUygulamasi:
         self.goal_status_combobox = ttk.Combobox(input_frame, values=["Devam Ediyor", "Tamamlandı", "İptal Edildi"],
                                                  state="readonly")
         self.goal_status_combobox.grid(row=5, column=1, padx=5, pady=5, sticky="ew")
-        self.goal_status_combobox.set("Devam Ediyor")  # Varsayılan durum
+        self.goal_status_combobox.set("Devam Ediyor")
 
         # Butonlar
         button_frame = ttk.Frame(goals_frame)
@@ -1303,7 +1272,7 @@ class GelirGiderUygulamasi:
 
     def listele_tasarruf_hedefleri(self):
         if not (hasattr(self, 'savings_goals_tree') and self.savings_goals_tree.winfo_exists()):
-            return  # If treeview is not yet created, just return
+            return
 
         for item in self.savings_goals_tree.get_children():
             self.savings_goals_tree.delete(item)
@@ -1335,7 +1304,7 @@ class GelirGiderUygulamasi:
             self.show_error("Hata", "Lütfen durumunu güncellemek istediğiniz bir tasarruf hedefi seçin.")
             return
 
-        goal_name = self.goal_name_entry.get().strip()  # Adı göstermek için alıyoruz
+        goal_name = self.goal_name_entry.get().strip()
         new_status = self.goal_status_combobox.get()
 
         if not new_status:
@@ -1354,7 +1323,6 @@ class GelirGiderUygulamasi:
         try:
             analysis_report = self.ai_predictor.analyze_and_suggest_savings()
 
-            # Text widget'ı oluşturulmuşsa içeriği güncelle
             if hasattr(self, 'savings_analysis_text') and self.savings_analysis_text.winfo_exists():
                 self.savings_analysis_text.config(state="normal")
                 self.savings_analysis_text.delete("1.0", tk.END)
@@ -1457,7 +1425,6 @@ class GelirGiderUygulamasi:
         phone = self.customer_phone_entry.get().strip()
         email = self.customer_email_entry.get().strip()
 
-        # Müşteri adı değiştiyse, fatura/tekliflerdeki müşteri adını da güncelle
         selected_item = self.customer_tree.selection()
         current_customer_name = self.customer_tree.item(selected_item[0], 'values')[1] if selected_item else None
 
@@ -1465,21 +1432,19 @@ class GelirGiderUygulamasi:
             self.show_error("Hata", "Müşteri adı boş olamaz.")
             return
 
-        # Eğer müşteri adı değiştiyse ve yeni isim zaten başka bir müşteride varsa hata ver.
         if name != current_customer_name and self.db_manager.get_customer_by_name(name, self.kullanici_id):
             self.show_error("Hata", f"'{name}' isimli bir müşteri zaten mevcut.")
             return
 
         if self.db_manager.update_customer(self.selected_customer_id, name, address if address else None,
                                            phone if phone else None, email if email else None, self.kullanici_id):
-            # Müşteri adı değiştiyse, ilgili faturaları da güncelle
             if name != current_customer_name:
                 self.db_manager.update_invoice_customer_name(current_customer_name, name, self.kullanici_id)
 
             self.show_message("Başarılı", "Müşteri başarıyla güncellendi.")
             self.temizle_musteri_formu()
             self.listele_musteriler()
-            self.listele_faturalar_teklifler()  # Fatura/teklif listesini de yenile
+            self.listele_faturalar_teklifler()
         else:
             self.show_error("Hata", "Müşteri güncellenirken bir sorun oluştu.")
 
@@ -1491,7 +1456,6 @@ class GelirGiderUygulamasi:
         selected_item = self.customer_tree.selection()
         customer_name_to_delete = self.customer_tree.item(selected_item[0], 'values')[1] if selected_item else None
 
-        # Müşteriye ait fatura/teklif olup olmadığını kontrol et
         invoice_count = self.db_manager.count_invoices_by_customer(customer_name_to_delete, self.kullanici_id)
         if invoice_count > 0:
             self.show_error("Hata",
@@ -1528,7 +1492,7 @@ class GelirGiderUygulamasi:
 
     def listele_musteriler(self):
         if not (hasattr(self, 'customer_tree') and self.customer_tree.winfo_exists()):
-            return  # If treeview is not yet created, just return
+            return
 
         for item in self.customer_tree.get_children():
             self.customer_tree.delete(item)
@@ -1584,7 +1548,7 @@ class GelirGiderUygulamasi:
         self.product_kdv_rate_entry = ttk.Entry(input_frame, validate="key",
                                                 validatecommand=(self.validate_numeric_cmd, '%P'))
         self.product_kdv_rate_entry.grid(row=4, column=1, padx=5, pady=5, sticky="ew")
-        self.product_kdv_rate_entry.insert(0, "18.0")  # Varsayılan KDV oranı
+        self.product_kdv_rate_entry.insert(0, "18.0")
 
         # Butonlar
         button_frame = ttk.Frame(product_frame)
@@ -1657,7 +1621,6 @@ class GelirGiderUygulamasi:
         selling_price_str = self.product_selling_price_entry.get()
         kdv_rate_str = self.product_kdv_rate_entry.get()
 
-        # Ürün adı değiştiyse, yeni adın başka bir üründe olup olmadığını kontrol et
         selected_item = self.product_tree.selection()
         current_product_name = self.product_tree.item(selected_item[0], 'values')[1] if selected_item else None
 
@@ -1686,7 +1649,7 @@ class GelirGiderUygulamasi:
             self.show_message("Başarılı", "Ürün/Hizmet başarıyla güncellendi.")
             self.temizle_urun_formu()
             self.listele_urunler()
-            self.listele_faturalar_teklifler()  # Fatura/teklif listesi güncellenmiş ürün isimleri için yenile
+            self.listele_faturalar_teklifler()
         else:
             self.show_error("Hata", "Ürün/Hizmet güncellenirken bir sorun oluştu.")
 
@@ -1694,10 +1657,6 @@ class GelirGiderUygulamasi:
         if not self.selected_product_id:
             self.show_error("Hata", "Lütfen silmek istediğiniz bir ürün/hizmet seçin.")
             return
-
-        # Ürünün herhangi bir faturada/teklifte kullanılıp kullanılmadığını kontrol etmek daha karmaşık olabilir
-        # (items_json içinde arama yapmak gerekir). Şimdilik bu kontrolü atlıyorum.
-        # Eğer bu kontrolü eklemek istersek, items_json'ları parse edip içinde ürün adına göre arama yapmalıyız.
 
         if messagebox.askyesno("Onay",
                                "Seçili ürün/hizmeti silmek istediğinizden emin misiniz? Bu işlem envanter ve fatura kayıtlarını etkileyebilir."):
@@ -1733,7 +1692,7 @@ class GelirGiderUygulamasi:
 
     def listele_urunler(self):
         if not (hasattr(self, 'product_tree') and self.product_tree.winfo_exists()):
-            return  # If treeview is not yet created, just return
+            return
 
         for item in self.product_tree.get_children():
             self.product_tree.delete(item)
@@ -1777,7 +1736,7 @@ class GelirGiderUygulamasi:
         self.doc_type_combobox.bind("<<ComboboxSelected>>", self.generate_document_number)
 
         ttk.Label(header_frame, text="Belge Numarası:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
-        self.doc_number_entry = ttk.Entry(header_frame, state="readonly")  # Otomatik atanacak
+        self.doc_number_entry = ttk.Entry(header_frame, state="readonly")
         self.doc_number_entry.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
         ttk.Button(header_frame, text="Numara Oluştur", command=self.generate_document_number).grid(row=1, column=2,
                                                                                                     padx=5, pady=5)
@@ -1785,7 +1744,6 @@ class GelirGiderUygulamasi:
         ttk.Label(header_frame, text="Müşteri:").grid(row=2, column=0, padx=5, pady=5, sticky="w")
         self.invoice_customer_combobox = ttk.Combobox(header_frame, state="readonly")
         self.invoice_customer_combobox.grid(row=2, column=1, padx=5, pady=5, sticky="ew")
-        # self.update_customer_combobox() # Müşteri listesini yükle - _load_current_tab_content() içinde çağrılacak
 
         ttk.Label(header_frame, text="Belge Tarihi:").grid(row=3, column=0, padx=5, pady=5, sticky="w")
         self.invoice_date_entry = DateEntry(header_frame, width=12, background='darkblue', foreground='white',
@@ -1796,7 +1754,6 @@ class GelirGiderUygulamasi:
         self.invoice_due_valid_date_entry = DateEntry(header_frame, width=12, background='darkblue', foreground='white',
                                                       borderwidth=2, locale='tr_TR')
         self.invoice_due_valid_date_entry.grid(row=4, column=1, padx=5, pady=5, sticky="ew")
-        # self.generate_document_number() # İlk numarayı oluştur - _load_current_tab_content() içinde çağrılacak
 
         # Ara Çizgi
         ttk.Separator(invoice_offer_frame, orient="horizontal").pack(fill="x", pady=10)
@@ -1812,7 +1769,6 @@ class GelirGiderUygulamasi:
         self.item_product_combobox = ttk.Combobox(item_input_frame, state="readonly")
         self.item_product_combobox.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
         self.item_product_combobox.bind("<<ComboboxSelected>>", self.on_product_selected_for_item)
-        # self.update_product_combobox_for_invoice_items() # Ürün listesini yükle - _load_current_tab_content() içinde çağrılacak
 
         ttk.Label(item_input_frame, text="Miktar:").grid(row=0, column=2, padx=5, pady=5, sticky="w")
         self.item_quantity_entry = ttk.Entry(item_input_frame, validate="key",
@@ -1892,7 +1848,7 @@ class GelirGiderUygulamasi:
         self.invoice_status_combobox.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
         self.invoice_status_combobox.set("Taslak")
 
-        notes_status_frame.grid_columnconfigure(1, weight=1)  # Notlar alanının genişlemesini sağla
+        notes_status_frame.grid_columnconfigure(1, weight=1)
 
         # Ana Butonlar
         main_buttons_frame = ttk.Frame(invoice_offer_frame)
@@ -1940,7 +1896,6 @@ class GelirGiderUygulamasi:
     def update_customer_combobox(self):
         customers = self.db_manager.get_customers(self.kullanici_id)
         customer_names = [c[1] for c in customers]
-        # Check if the combobox exists before trying to configure it
         if hasattr(self, 'invoice_customer_combobox') and self.invoice_customer_combobox.winfo_exists():
             self.invoice_customer_combobox['values'] = customer_names
             if customer_names:
@@ -1951,12 +1906,11 @@ class GelirGiderUygulamasi:
     def update_product_combobox_for_invoice_items(self):
         products = self.db_manager.get_products(self.kullanici_id)
         product_names = [p[1] for p in products]
-        # Check if the combobox exists before trying to configure it
         if hasattr(self, 'item_product_combobox') and self.item_product_combobox.winfo_exists():
             self.item_product_combobox['values'] = product_names
             if product_names:
                 self.item_product_combobox.set(product_names[0])
-                self.on_product_selected_for_item()  # İlk ürünün bilgilerini otomatik yükle
+                self.on_product_selected_for_item()
             else:
                 self.item_product_combobox.set("")
                 if hasattr(self, 'item_unit_price_label') and self.item_unit_price_label.winfo_exists():
@@ -1974,7 +1928,6 @@ class GelirGiderUygulamasi:
         if selected_product_name:
             product_info = self.db_manager.get_product_by_name(selected_product_name, self.kullanici_id)
             if product_info:
-                # product_info: id, name, stock, purchase_price, selling_price, kdv_rate
                 self.current_selected_product_details = {
                     "id": product_info[0],
                     "name": product_info[1],
@@ -1984,7 +1937,7 @@ class GelirGiderUygulamasi:
                     "kdv_rate": product_info[5]
                 }
                 if hasattr(self, 'item_unit_price_label') and self.item_unit_price_label.winfo_exists():
-                    self.item_unit_price_label.config(text=f"{product_info[4]:.2f} TL")  # Satış fiyatı
+                    self.item_unit_price_label.config(text=f"{product_info[4]:.2f} TL")
                 if hasattr(self, 'item_kdv_rate_label') and self.item_kdv_rate_label.winfo_exists():
                     self.item_kdv_rate_label.config(text=f"{product_info[5]:.2f}%")
                 self.calculate_item_totals_on_change()
@@ -2015,11 +1968,11 @@ class GelirGiderUygulamasi:
 
         try:
             quantity_str = self.item_quantity_entry.get()
-            # Eğer miktar boşsa veya geçerli bir sayı değilse 0 olarak kabul et
-            quantity = float(quantity_str) if quantity_str and self._validate_numeric_input(quantity_str) else 0.0
+            quantity = float(quantity_str) if quantity_str and self._validate_numeric_input_wrapper(
+                quantity_str) else 0.0
 
             unit_price = self.current_selected_product_details["selling_price"]
-            kdv_rate = self.current_selected_product_details["kdv_rate"] / 100.0  # Yüzdeyi ondalığa çevir
+            kdv_rate = self.current_selected_product_details["kdv_rate"] / 100.0
 
             subtotal_before_kdv = quantity * unit_price
             kdv_amount = subtotal_before_kdv * kdv_rate
@@ -2028,7 +1981,7 @@ class GelirGiderUygulamasi:
             if hasattr(self, 'item_kdv_amount_label') and self.item_kdv_amount_label.winfo_exists():
                 self.item_kdv_amount_label.config(text=f"{kdv_amount:.2f} TL")
             if hasattr(self, 'item_subtotal_label') and self.item_subtotal_label.winfo_exists():
-                self.item_subtotal_label.config(text=f"{total_with_kdv:.2f} TL")  # Ara toplam KDV dahil gösteriliyor
+                self.item_subtotal_label.config(text=f"{total_with_kdv:.2f} TL")
 
         except ValueError:
             if hasattr(self, 'item_kdv_amount_label') and self.item_kdv_amount_label.winfo_exists():
@@ -2053,17 +2006,15 @@ class GelirGiderUygulamasi:
             self.show_error("Hata", "Geçersiz miktar formatı.")
             return
 
-        product_info = self.current_selected_product_details  # Already loaded on product selection
+        product_info = self.current_selected_product_details
         if not product_info:
             self.show_error("Hata", "Ürün bilgileri yüklenemedi. Lütfen geçerli bir ürün seçin.")
             return
 
-        # Stok kontrolü sadece fatura için yapılır
         if self.doc_type_combobox.get() == "Fatura" and quantity > product_info["stock"]:
             self.show_error("Hata", f"Yetersiz stok! Mevcut stok: {product_info['stock']:.2f}")
             return
 
-        # Eğer aynı ürün zaten eklenmişse miktarı güncelle
         if hasattr(self, 'invoice_items_tree') and self.invoice_items_tree.winfo_exists():
             for item_id in self.invoice_items_tree.get_children():
                 item_values = self.invoice_items_tree.item(item_id, 'values')
@@ -2071,13 +2022,11 @@ class GelirGiderUygulamasi:
                     existing_quantity = float(item_values[1])
                     new_quantity = existing_quantity + quantity
 
-                    # Güncellenmiş stok kontrolü
                     if self.doc_type_combobox.get() == "Fatura" and new_quantity > product_info["stock"]:
                         self.show_error("Hata",
                                         f"Bu ürün için toplam miktar ({new_quantity}) stok ({product_info['stock']}) miktarını aşıyor. Lütfen miktarı düşürün.")
                         return
 
-                    # Hesaplamaları yeniden yap
                     unit_price = product_info["selling_price"]
                     kdv_rate = product_info["kdv_rate"] / 100.0
                     subtotal_before_kdv = new_quantity * unit_price
@@ -2096,7 +2045,6 @@ class GelirGiderUygulamasi:
                     self.temizle_invoice_item_form()
                     return
 
-            # Yeni kalem ekle
             unit_price = product_info["selling_price"]
             kdv_rate = product_info["kdv_rate"] / 100.0
             subtotal_before_kdv = quantity * unit_price
@@ -2136,14 +2084,13 @@ class GelirGiderUygulamasi:
                 product_name = values[0]
                 quantity = values[1]
 
-                # Ürün combobox'ını ve miktar alanını güncelle
                 if hasattr(self, 'item_product_combobox') and self.item_product_combobox.winfo_exists():
                     self.item_product_combobox.set(product_name)
-                self.on_product_selected_for_item()  # Ürün bilgilerini yükle
+                self.on_product_selected_for_item()
                 if hasattr(self, 'item_quantity_entry') and self.item_quantity_entry.winfo_exists():
                     self.item_quantity_entry.delete(0, tk.END)
                     self.item_quantity_entry.insert(0, quantity)
-                self.calculate_item_totals_on_change()  # Toplamları tekrar hesapla
+                self.calculate_item_totals_on_change()
         else:
             self.show_error("Hata", "Fatura kalemleri tablosu henüz oluşturulmadı.")
 
@@ -2154,7 +2101,6 @@ class GelirGiderUygulamasi:
         if hasattr(self, 'invoice_items_tree') and self.invoice_items_tree.winfo_exists():
             for item_id in self.invoice_items_tree.get_children():
                 values = self.invoice_items_tree.item(item_id, 'values')
-                # amounts are already formatted strings, convert back to float
                 quantity = float(values[1])
                 unit_price = float(values[2])
                 kdv_rate = float(values[3]) / 100.0
@@ -2177,7 +2123,7 @@ class GelirGiderUygulamasi:
     def generate_document_number(self, event=None):
         if not (hasattr(self, 'doc_type_combobox') and self.doc_type_combobox.winfo_exists() and \
                 hasattr(self, 'doc_number_entry') and self.doc_number_entry.winfo_exists()):
-            return  # If widgets are not yet created, just return
+            return
 
         doc_type = self.doc_type_combobox.get()
         last_invoice_num, last_offer_num = self.db_manager.get_user_invoice_offer_nums(self.kullanici_id)
@@ -2248,19 +2194,16 @@ class GelirGiderUygulamasi:
                                                 items_json, total_excl_kdv, total_kdv, notes if notes else None, status,
                                                 self.kullanici_id):
 
-            # Belge numarası sayacını güncelle
             if doc_type == "Fatura":
                 current_invoice_num, current_offer_num = self.db_manager.get_user_invoice_offer_nums(self.kullanici_id)
                 self.db_manager.update_user_invoice_offer_num(self.kullanici_id, invoice_num=current_invoice_num + 1)
-                # Stoktan düşme işlemi (sadece fatura oluşturulurken)
                 for item_data in items_list:
                     product_name = item_data['ad']
                     quantity = item_data['miktar']
                     product_info = self.db_manager.get_product_by_name(product_name, self.kullanici_id)
                     if product_info:
-                        new_stock = product_info[2] - quantity  # product_info[2] is stock
-                        self.db_manager.update_product_stock(product_info[0],
-                                                             new_stock)  # product_info[0] is product_id
+                        new_stock = product_info[2] - quantity
+                        self.db_manager.update_product_stock(product_info[0], new_stock)
             elif doc_type == "Teklif":
                 current_invoice_num, current_offer_num = self.db_manager.get_user_invoice_offer_nums(self.kullanici_id)
                 self.db_manager.update_user_invoice_offer_num(self.kullanici_id, offer_num=current_offer_num + 1)
@@ -2268,7 +2211,7 @@ class GelirGiderUygulamasi:
             self.show_message("Başarılı", f"{doc_type} başarıyla kaydedildi.")
             self.clear_invoice_offer_form()
             self.listele_faturalar_teklifler()
-            self.listele_urunler()  # Stok güncellendiği için ürün listesini yenile
+            self.listele_urunler()
 
         else:
             self.show_error("Hata", f"{doc_type} kaydedilirken bir sorun oluştu veya belge numarası zaten mevcut.")
@@ -2318,13 +2261,6 @@ class GelirGiderUygulamasi:
             self.total_excl_kdv_label.cget("text").replace("KDV Hariç Toplam: ", "").replace(" TL", ""))
         total_kdv = float(self.total_kdv_label.cget("text").replace("Toplam KDV: ", "").replace(" TL", ""))
 
-        # Eğer fatura güncellenirken tipi veya kalemi değişiyorsa stokları düzeltmek karmaşık olabilir.
-        # Bu yüzden, eğer fatura ise ve stok etkilenecekse, bu işlemi basitleştirmek adına:
-        # Eski kalemlerin stoklarını geri yükleyip, yeni kalemlerin stoklarını düşürebiliriz.
-        # Ancak bu, daha önce kaydedilmiş olan faturaların stoklarını doğru takip etmeyi gerektirir.
-        # Basitlik adına, mevcut durumda yalnızca yeni fatura oluşturulduğunda stok düşüşü yapıyoruz.
-        # Güncelleme sırasında stok yönetimi, iş mantığına göre daha detaylı ele alınabilir.
-
         if self.db_manager.update_invoice_offer(self.selected_invoice_offer_id, doc_type, doc_number, customer_name,
                                                 doc_date_db_format, due_valid_date_db_format, items_json,
                                                 total_excl_kdv,
@@ -2345,12 +2281,11 @@ class GelirGiderUygulamasi:
             self.show_error("Hata", "Seçili fatura/teklif bulunamadı.")
             return
 
-        doc_type = selected_item_data[1]  # type (Fatura/Teklif)
-        items_json = selected_item_data[6]  # items_json
+        doc_type = selected_item_data[1]
+        items_json = selected_item_data[6]
 
         if messagebox.askyesno("Onay", f"Seçili {doc_type}'i silmek istediğinizden emin misiniz?"):
             if self.db_manager.delete_invoice_offer(self.selected_invoice_offer_id, self.kullanici_id):
-                # Eğer fatura siliniyorsa, stokları geri yükle
                 if doc_type == "Fatura":
                     try:
                         items_list = json.loads(items_json)
@@ -2362,7 +2297,7 @@ class GelirGiderUygulamasi:
                                 current_stock = product_info[2]
                                 new_stock = current_stock + quantity
                                 self.db_manager.update_product_stock(product_info[0], new_stock)
-                        self.listele_urunler()  # Ürün listesini yenile
+                        self.listele_urunler()
                     except Exception as e:
                         print(f"Stok geri yükleme hatası: {e}")
                         self.show_error("Hata", f"Fatura silindi ancak stok geri yüklenirken sorun oluştu: {e}")
@@ -2379,11 +2314,8 @@ class GelirGiderUygulamasi:
             values = self.invoices_offers_tree.item(selected_item, 'values')
             self.selected_invoice_offer_id = values[0]
 
-            # Detayları veritabanından çek (items_json ve diğer tüm alanlar için)
             doc_detail = self.db_manager.get_invoice_offer_by_id(self.selected_invoice_offer_id, self.kullanici_id)
             if doc_detail:
-                # doc_detail: id, type, document_number, customer_name, document_date, due_validity_date, items_json, total_amount_excluding_kdv, total_kdv_amount, total_amount_with_kdv, notes, status
-
                 if hasattr(self, 'doc_type_combobox') and self.doc_type_combobox.winfo_exists():
                     self.doc_type_combobox.set(doc_detail[1])
 
@@ -2404,14 +2336,14 @@ class GelirGiderUygulamasi:
                         self.invoice_date_entry.set_date(datetime.now())
 
                 if hasattr(self, 'invoice_due_valid_date_entry') and self.invoice_due_valid_date_entry.winfo_exists():
-                    if doc_detail[5]:  # due_validity_date olabilir
+                    if doc_detail[5]:
                         try:
                             self.invoice_due_valid_date_entry.set_date(datetime.strptime(doc_detail[5], '%Y-%m-%d'))
                         except ValueError:
                             self.show_error("Hata", "Veritabanından okunan vade/geçerlilik tarih formatı geçersiz.")
                             self.invoice_due_valid_date_entry.set_date(datetime.now())
                     else:
-                        self.invoice_due_valid_date_entry.set_date(datetime.now())  # Varsayılan olarak bugünü ayarla
+                        self.invoice_due_valid_date_entry.set_date(datetime.now())
 
                 if hasattr(self, 'invoice_notes_text') and self.invoice_notes_text.winfo_exists():
                     self.invoice_notes_text.delete("1.0", tk.END)
@@ -2421,7 +2353,6 @@ class GelirGiderUygulamasi:
                 if hasattr(self, 'invoice_status_combobox') and self.invoice_status_combobox.winfo_exists():
                     self.invoice_status_combobox.set(doc_detail[10])
 
-                # Kalemleri Treeview'e yükle
                 if hasattr(self, 'invoice_items_tree') and self.invoice_items_tree.winfo_exists():
                     for item in self.invoice_items_tree.get_children():
                         self.invoice_items_tree.delete(item)
@@ -2437,7 +2368,7 @@ class GelirGiderUygulamasi:
                             f"{item_data.get('ara_toplam', 0):.2f}"
                         ))
 
-                self.calculate_grand_totals()  # Seçili belgenin toplamlarını güncelle
+                self.calculate_grand_totals()
             else:
                 self.show_error("Hata", "Seçili fatura/teklif detayları yüklenemedi.")
                 self.clear_invoice_offer_form()
@@ -2445,9 +2376,8 @@ class GelirGiderUygulamasi:
             self.clear_invoice_offer_form()
 
     def listele_faturalar_teklifler(self):
-        # Check if invoices_offers_tree exists before configuring it
         if not (hasattr(self, 'invoices_offers_tree') and self.invoices_offers_tree.winfo_exists()):
-            return  # If treeview is not yet created, just return
+            return
 
         for item in self.invoices_offers_tree.get_children():
             self.invoices_offers_tree.delete(item)
@@ -2459,63 +2389,51 @@ class GelirGiderUygulamasi:
 
     def clear_invoice_offer_form(self):
         self.selected_invoice_offer_id = None
-        # Check if doc_type_combobox exists before configuring it
         if hasattr(self, 'doc_type_combobox') and self.doc_type_combobox.winfo_exists():
             self.doc_type_combobox.set("Fatura")
-        self.generate_document_number()  # Yeni belge numarası oluştur
-        self.update_customer_combobox()  # Müşteri combobox'ını yenile
+        self.generate_document_number()
+        self.update_customer_combobox()
 
-        # Check if invoice_date_entry exists before configuring it
         if hasattr(self, 'invoice_date_entry') and self.invoice_date_entry.winfo_exists():
             self.invoice_date_entry.set_date(datetime.now())
 
-        # Check if invoice_due_valid_date_entry exists before configuring it
         if hasattr(self, 'invoice_due_valid_date_entry') and self.invoice_due_valid_date_entry.winfo_exists():
             self.invoice_due_valid_date_entry.set_date(datetime.now())
 
-        # Check if invoice_notes_text exists before configuring it
         if hasattr(self, 'invoice_notes_text') and self.invoice_notes_text.winfo_exists():
             self.invoice_notes_text.delete("1.0", tk.END)
 
-        # Check if invoice_status_combobox exists before configuring it
         if hasattr(self, 'invoice_status_combobox') and self.invoice_status_combobox.winfo_exists():
             self.invoice_status_combobox.set("Taslak")
 
-        # Kalemler listesini temizle
         if hasattr(self, 'invoice_items_tree') and self.invoice_items_tree.winfo_exists():
             for item in self.invoice_items_tree.get_children():
                 self.invoice_items_tree.delete(item)
-        self.temizle_invoice_item_form()  # Kalem ekleme formunu da temizle
-        self.calculate_grand_totals()  # Toplamları sıfırla
+        self.temizle_invoice_item_form()
+        self.calculate_grand_totals()
 
     def temizle_invoice_item_form(self):
-        # Check if item_product_combobox exists before configuring it
         if hasattr(self, 'item_product_combobox') and self.item_product_combobox.winfo_exists():
             self.item_product_combobox.set("")
 
-        # Check if item_quantity_entry exists before configuring it
         if hasattr(self, 'item_quantity_entry') and self.item_quantity_entry.winfo_exists():
             self.item_quantity_entry.delete(0, tk.END)
             self.item_quantity_entry.insert(0, "1.0")
 
-        # Check if item_unit_price_label exists before configuring it
         if hasattr(self, 'item_unit_price_label') and self.item_unit_price_label.winfo_exists():
             self.item_unit_price_label.config(text="0.00 TL")
 
-        # Check if item_kdv_rate_label exists before configuring it
         if hasattr(self, 'item_kdv_rate_label') and self.item_kdv_rate_label.winfo_exists():
             self.item_kdv_rate_label.config(text="0.00%")
 
-        # Check if item_kdv_amount_label exists before configuring it
         if hasattr(self, 'item_kdv_amount_label') and self.item_kdv_amount_label.winfo_exists():
             self.item_kdv_amount_label.config(text="0.00 TL")
 
-        # Check if item_subtotal_label exists before configuring it
         if hasattr(self, 'item_subtotal_label') and self.item_subtotal_label.winfo_exists():
             self.item_subtotal_label.config(text="0.00 TL")
 
         self.current_selected_product_details = None
-        self.update_product_combobox_for_invoice_items()  # Ürün combobox'ını yenile
+        self.update_product_combobox_for_invoice_items()
 
     def generate_invoice_offer_pdf(self):
         """Seçili fatura/teklif için PDF oluşturur."""
@@ -2529,13 +2447,11 @@ class GelirGiderUygulamasi:
             return
 
         try:
-            # doc_detail'den gerekli bilgileri al
             doc_id, doc_type, doc_number, customer_name, doc_date, due_validity_date, items_json, \
                 total_excl_kdv, total_kdv, total_with_kdv, notes, status = doc_detail
 
             items_list = json.loads(items_json)
 
-            # PDFGenerator'a gönderilecek veriyi tek bir sözlükte topla
             doc_data = {
                 "doc_type": doc_type,
                 "doc_number": doc_number,
@@ -2546,12 +2462,10 @@ class GelirGiderUygulamasi:
                 "total_excl_kdv": total_excl_kdv,
                 "total_kdv": total_kdv,
                 "grand_total": total_with_kdv,
-                # Yeni PDFGenerator'da total_excl_kdv + total_kdv olarak yeniden hesaplanıyor, ama yine de gönderelim
                 "notes": notes,
                 "status": status
             }
 
-            # Dosya kaydetme diyaloğunu aç
             file_path = filedialog.asksaveasfilename(
                 defaultextension=".pdf",
                 filetypes=[("PDF files", "*.pdf")],
@@ -2560,8 +2474,9 @@ class GelirGiderUygulamasi:
             )
 
             if file_path:
-                # PDFGenerator'daki generate_document_pdf metodunu çağır
-                # Bu metot kendi içinde müşteri bilgilerini çekecektir.
+                # generate_document_pdf, dosya yolunu PDFGenerator içinde alıp kendi içinde kaydetmeli.
+                # pdf_generator.py'deki generate_document_pdf metodu, artık dosya adını kendi içinde belirliyor
+                # ve geri dönüş değeri olarak abs path veriyor. O yüzden burada tekrar file_path geçmiyoruz.
                 generated_file_path = self.pdf_generator.generate_document_pdf(doc_data)
 
                 if generated_file_path:
@@ -2582,56 +2497,80 @@ class GelirGiderUygulamasi:
         self.reports_analysis_frame = ttk.LabelFrame(parent_frame, text="Raporlar ve Analizler", padding="15")
         self.reports_analysis_frame.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # Grafik Alanı
-        chart_frame = ttk.LabelFrame(self.reports_analysis_frame, text="Finansal Grafikler", padding="10")
-        chart_frame.pack(fill="both", expand=True, padx=5, pady=5)
-        self.chart_canvas_frame = ttk.Frame(chart_frame)
-        self.chart_canvas_frame.pack(fill="both", expand=True)
-        # Grafiklerin buraya yerleşeceğini belirtiyoruz. Render metodunda eski grafikler temizlenip yenileri eklenecek.
+        # Grafik Butonları Alanı
+        chart_buttons_frame = ttk.LabelFrame(self.reports_analysis_frame, text="Finansal Grafikler", padding="10")
+        chart_buttons_frame.pack(fill="x", padx=5, pady=5)
 
-        # Tasarruf Analizi Alanı
-        analysis_frame = ttk.LabelFrame(self.reports_analysis_frame, text="Tasarruf Analizi ve Önerileri", padding="10")
-        analysis_frame.pack(fill="both", expand=True, padx=5, pady=5)
-        self.savings_analysis_text = tk.Text(analysis_frame, wrap="word", height=15, width=80, font=("Arial", 10),
+        ttk.Button(chart_buttons_frame, text="Kategori Bazında Gelir/Gider Grafikleri",
+                   command=self.show_category_charts_window).pack(side="left", padx=5, pady=5)
+        ttk.Button(chart_buttons_frame, text="Aylık Bakiye Trend Grafiği", command=self.show_balance_chart_window).pack(
+            side="left", padx=5, pady=5)
+
+        # Tasarruf Analizi ve Vergi Raporu Ortak Alanı
+        # Bu frame'i grid ile ikiye böleceğiz
+        analysis_report_container_frame = ttk.Frame(self.reports_analysis_frame)
+        analysis_report_container_frame.pack(fill="both", expand=True, padx=5, pady=5)
+
+        # Sol Kısım: Tasarruf Analizi
+        savings_frame = ttk.LabelFrame(analysis_report_container_frame, text="Tasarruf Analizi ve Önerileri",
+                                       padding="10")
+        savings_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)  # Grid kullanıldı
+
+        ttk.Button(savings_frame, text="Tasarruf Analizi Yap", command=self.tasarruf_analizi_yap).pack(pady=5)
+        self.savings_analysis_text = tk.Text(savings_frame, wrap="word", height=15, font=("Arial", 10),
                                              state="disabled", bg="#f8f8f8")
         self.savings_analysis_text.pack(fill="both", expand=True)
 
-    def render_charts(self):
-        """Grafikleri çizer veya günceller."""
-        # Mevcut grafik widget'larını temizle ve figürleri kapat
-        if self.canvas_category and self.canvas_category.get_tk_widget().winfo_exists():
-            self.canvas_category.get_tk_widget().destroy()
-        if self.fig_category:
-            plt.close(self.fig_category)
-            self.fig_category = None  # Figürü sıfırla
+        # Sağ Kısım: Vergi Raporu
+        tax_report_frame = ttk.LabelFrame(analysis_report_container_frame, text="Vergi Raporu Oluştur", padding="10")
+        tax_report_frame.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)  # Grid kullanıldı
 
-        if self.canvas_balance and self.canvas_balance.get_tk_widget().winfo_exists():
-            self.canvas_balance.get_tk_widget().destroy()
-        if self.fig_balance:
-            plt.close(self.fig_balance)
-            self.fig_balance = None  # Figürü sıfırla
+        date_selection_frame = ttk.Frame(tax_report_frame)
+        date_selection_frame.pack(pady=5)
 
-        # Kategori bazında gelir/gider verisi
-        # Bu metod DatabaseManager'dan kategori ve toplam miktar döner: (type, category, total_amount)
+        ttk.Label(date_selection_frame, text="Başlangıç Tarihi:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
+        self.tax_report_start_date = DateEntry(date_selection_frame, width=12, background='darkblue',
+                                               foreground='white', borderwidth=2, locale='tr_TR')
+        self.tax_report_start_date.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+
+        ttk.Label(date_selection_frame, text="Bitiş Tarihi:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
+        self.tax_report_end_date = DateEntry(date_selection_frame, width=12, background='darkblue', foreground='white',
+                                             borderwidth=2, locale='tr_TR')
+        self.tax_report_end_date.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
+
+        ttk.Button(date_selection_frame, text="Rapor Oluştur", command=self.generate_tax_report).grid(row=2, column=0,
+                                                                                                      columnspan=2,
+                                                                                                      pady=10)
+
+        self.tax_report_text = tk.Text(tax_report_frame, wrap="word", height=15, font=("Arial", 10), state="disabled",
+                                       bg="#f8f8f8")
+        self.tax_report_text.pack(fill="both", expand=True, pady=10)
+
+        # Container frame için column yapılandırması
+        analysis_report_container_frame.grid_columnconfigure(0, weight=1)
+        analysis_report_container_frame.grid_columnconfigure(1, weight=1)
+        analysis_report_container_frame.grid_rowconfigure(0, weight=1)  # Row'un da genişlemesini sağla
+
+    def show_category_charts_window(self):
+        """Kategori bazında gelir/gider grafiklerini yeni bir pencerede gösterir."""
+        chart_window = tk.Toplevel(self.root)
+        chart_window.title("Kategori Bazında Gelir/Gider Grafikleri")
+        chart_window.geometry("1100x600")
+
         category_summary_data = self.db_manager.get_income_expenses_by_month_and_category(self.kullanici_id,
                                                                                           num_months=12)
 
-        # Zaman serisi bakiye verisi
-        # Bu metod DatabaseManager'dan (date, type, amount) döner
-        time_series_raw_data = self.db_manager.get_monthly_balance_trend(self.kullanici_id, num_months=12)
-
-        # Kategori Bazında Gelir/Gider Pastası
         expense_by_category = {}
         income_by_category = {}
         if category_summary_data:
             for type, category, amount in category_summary_data:
-                if category:  # Kategorisi olmayanları dahil etmiyoruz
+                if category:
                     if type == 'Gider':
                         expense_by_category[category] = expense_by_category.get(category, 0) + amount
                     elif type == 'Gelir':
                         income_by_category[category] = income_by_category.get(category, 0) + amount
 
-        self.fig_category, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))  # İki grafik yan yana
+        fig_category, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
 
         if expense_by_category:
             ax1.pie(expense_by_category.values(), labels=expense_by_category.keys(), autopct='%1.1f%%', startangle=90)
@@ -2649,79 +2588,56 @@ class GelirGiderUygulamasi:
                      transform=ax2.transAxes)
             ax2.set_title('Gelirler Kategori Bazında')
 
-        self.fig_category.tight_layout()
-        self.canvas_category = FigureCanvasTkAgg(self.fig_category, master=self.chart_canvas_frame)
-        self.canvas_category.draw()
-        self.canvas_category.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=10)
+        fig_category.tight_layout()
 
-        # Zaman Serisi Bakiye Grafiği
+        canvas_category = FigureCanvasTkAgg(fig_category, master=chart_window)
+        canvas_category.draw()
+        canvas_category.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        chart_window.protocol("WM_DELETE_WINDOW", lambda: self._on_chart_window_close(chart_window, fig_category))
+
+    def show_balance_chart_window(self):
+        """Aylık bakiye trend grafiğini yeni bir pencerede gösterir."""
+        chart_window = tk.Toplevel(self.root)
+        chart_window.title("Aylık Bakiye Trend Grafiği")
+        chart_window.geometry("800x500")
+
+        time_series_raw_data = self.db_manager.get_monthly_balance_trend(self.kullanici_id, num_months=12)
+
+        fig_balance, ax = plt.subplots(figsize=(8, 4))
+
         if time_series_raw_data:
-            # Pandas DataFrame'e dönüştür
             df = pd.DataFrame(time_series_raw_data, columns=['date', 'type', 'amount'])
             df['date'] = pd.to_datetime(df['date'])
             df.set_index('date', inplace=True)
-
-            # İşlem tipine göre miktarları işaretle (Gelir pozitif, Gider negatif)
             df['signed_amount'] = df.apply(lambda row: row['amount'] if row['type'] == 'Gelir' else -row['amount'],
                                            axis=1)
-
-            # Tarihe göre sırala
             df = df.sort_values('date')
-
-            # Kümülatif bakiyeyi hesapla
             df['cumulative_balance'] = df['signed_amount'].cumsum()
+            monthly_cumulative_balance = df['cumulative_balance'].resample('ME').last().ffill().fillna(0)
 
-            # Her ayın sonundaki kümülatif bakiyeyi al
-            # resample('M') aylık frekans. last() ayın son günündeki değeri alır. ffill() ileriye doğru doldurur. fillna(0) boşlukları 0 yapar.
-            monthly_cumulative_balance = df['cumulative_balance'].resample('M').last().ffill().fillna(0)
-
-            self.fig_balance, ax = plt.subplots(figsize=(10, 5))
             monthly_cumulative_balance.plot(ax=ax, kind='line', marker='o')
             ax.set_title('Aylık Kümülatif Bakiye Trendi')
             ax.set_xlabel('Tarih')
             ax.set_ylabel('Bakiye (TL)')
             ax.grid(True)
-            self.fig_balance.tight_layout()
-            self.canvas_balance = FigureCanvasTkAgg(self.fig_balance, master=self.chart_canvas_frame)
-            self.canvas_balance.draw()
-            self.canvas_balance.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=10)
         else:
-            self.fig_balance, ax = plt.subplots(figsize=(10, 5))
             ax.text(0.5, 0.5, 'Bakiye Trendi Verisi Yok', horizontalalignment='center', verticalalignment='center',
                     transform=ax.transAxes)
             ax.set_title('Aylık Kümülatif Bakiye Trendi')
-            self.canvas_balance = FigureCanvasTkAgg(self.fig_balance, master=self.chart_canvas_frame)
-            self.canvas_balance.draw()
-            self.canvas_balance.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=10)
 
-    # --- Vergi Raporu UI ve Fonksiyonları ---
-    def _create_tax_report_ui(self, parent_frame):
-        """Vergi Raporu arayüzünü oluşturur."""
-        tax_report_frame = ttk.LabelFrame(parent_frame, text="Vergi Raporu", padding="15")
-        tax_report_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        fig_balance.tight_layout()
 
-        # Tarih Seçimi
-        date_selection_frame = ttk.Frame(tax_report_frame)
-        date_selection_frame.pack(pady=10)
+        canvas_balance = FigureCanvasTkAgg(fig_balance, master=chart_window)
+        canvas_balance.draw()
+        canvas_balance.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        ttk.Label(date_selection_frame, text="Başlangıç Tarihi:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
-        self.tax_report_start_date = DateEntry(date_selection_frame, width=12, background='darkblue',
-                                               foreground='white', borderwidth=2, locale='tr_TR')
-        self.tax_report_start_date.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        chart_window.protocol("WM_DELETE_WINDOW", lambda: self._on_chart_window_close(chart_window, fig_balance))
 
-        ttk.Label(date_selection_frame, text="Bitiş Tarihi:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
-        self.tax_report_end_date = DateEntry(date_selection_frame, width=12, background='darkblue', foreground='white',
-                                             borderwidth=2, locale='tr_TR')
-        self.tax_report_end_date.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
-
-        ttk.Button(date_selection_frame, text="Rapor Oluştur", command=self.generate_tax_report).grid(row=2, column=0,
-                                                                                                      columnspan=2,
-                                                                                                      pady=10)
-
-        # Rapor Metin Alanı
-        self.tax_report_text = tk.Text(tax_report_frame, wrap="word", height=20, font=("Arial", 10), state="disabled",
-                                       bg="#f8f8f8")
-        self.tax_report_text.pack(fill="both", expand=True, pady=10)
+    def _on_chart_window_close(self, window, fig):
+        """Grafik penceresi kapatıldığında Matplotlib figürünü temizler."""
+        plt.close(fig)
+        window.destroy()
 
     def generate_tax_report(self):
         """Belirli tarih aralığı için vergi raporu oluşturur."""
@@ -2745,24 +2661,20 @@ class GelirGiderUygulamasi:
             self.show_error("Hata", str(e))
             return
 
-        report_content = []
-        report_content.append("--- Vergi Raporu ---\n")
-        report_content.append(f"Tarih Aralığı: {start_date_db_format} - {end_date_db_format}\n")
+        report_content_list = []  # PDFGenerator'a göndermek için listeye ihtiyacımız olacak
 
-        # Toplam KDV'leri hesapla
+        # Sadece rapor içeriğini hazırlayacak mantık burada kalsın
+        report_text_lines = []
+        report_text_lines.append("--- Vergi Raporu ---\n")
+        report_text_lines.append(f"Tarih Aralığı: {start_date_db_format} - {end_date_db_format}\n")
+
         total_sales_kdv = self.db_manager.get_total_sales_kdv(start_date_db_format, end_date_db_format,
                                                               self.kullanici_id)
 
-        # Alış KDV'sini hesaplamak için, ürünlerin alış fiyatlarındaki KDV'yi çekmemiz gerekir.
-        # Bu, doğrudan bir fatura kaleminden gelmediği için biraz daha karmaşık.
-        # Basit bir yaklaşım olarak, buraya manuel giriş veya transaction kayıtlarındaki giderlerden KDV tahmini ekleyebiliriz.
-        # Şu an için sadece satış KDV'si raporlanıyor.
-
-        # Detaylı KDV dökümü (fatura kalemlerinden)
         invoice_item_jsons = self.db_manager.get_invoice_jsons_for_tax_report(start_date_db_format, end_date_db_format,
                                                                               self.kullanici_id)
 
-        kdv_by_rate = {}  # {KDV_Oranı: Toplam_KDV_Miktarı}
+        kdv_by_rate = {}
 
         for item_json_tuple in invoice_item_jsons:
             items_list = json.loads(item_json_tuple[0])
@@ -2771,24 +2683,149 @@ class GelirGiderUygulamasi:
                 kdv_amount = item.get("kdv_miktari", 0)
                 kdv_by_rate[kdv_rate] = kdv_by_rate.get(kdv_rate, 0) + kdv_amount
 
-        report_content.append("--- Detaylı Satış KDV Dökümü ---")
+        report_text_lines.append("--- Detaylı Satış KDV Dökümü ---")
+        kdv_detail_data = [["KDV Oranı (%)", "KDV Miktarı (TL)"]]
         if kdv_by_rate:
             for rate, amount in sorted(kdv_by_rate.items()):
-                report_content.append(f"KDV Oranı %{rate:.2f}: {amount:.2f} TL")
+                report_text_lines.append(f"KDV Oranı %{rate:.2f}: {amount:.2f} TL")
+                kdv_detail_data.append([f"{rate:.2f}%", f"{amount:.2f} TL"])
         else:
-            report_content.append("Bu dönemde satış KDV'si içeren fatura kalemi bulunamadı.")
-        report_content.append("\n")
+            report_text_lines.append("Bu dönemde satış KDV'si içeren fatura kalemi bulunamadı.")
+            kdv_detail_data.append(["Veri Yok", "Veri Yok"])
+        report_text_lines.append("\n")
 
-        report_content.append(f"Toplam Hesaplanan KDV (Çıkış KDV'si): {total_sales_kdv:.2f} TL")
-        report_content.append(
-            "Giriş KDV'si (Alış KDV'si) hesaplaması için manuel giriş veya detaylı fiş/fatura takibi gereklidir.\\n")
-        report_content.append(
+        report_text_lines.append(f"Toplam Hesaplanan KDV (Çıkış KDV'si): {total_sales_kdv:.2f} TL")
+        report_text_lines.append(
+            "Giriş KDV'si (Alış KDV'si) hesaplaması için manuel giriş veya detaylı fiş/fatura takibi gereklidir.\n")
+        report_text_lines.append(
             "Önemli Not: Bu rapor bir mali müşavir raporu değildir. Yalnızca bilgilendirme amaçlıdır. "
             "Gerçek vergi beyanlarınız için lütfen bir mali müşavire danışın.")
 
         self.tax_report_text.config(state="normal")
         self.tax_report_text.delete("1.0", tk.END)
-        self.tax_report_text.insert("1.0", "\n".join(report_content))
+        self.tax_report_text.insert("1.0", "\n".join(report_text_lines))
         self.tax_report_text.config(state="disabled")
         self.show_message("Rapor Oluşturuldu", "Vergi raporu başarıyla oluşturuldu.")
+
+        # PDF çıktısı için veriyi hazırla
+        pdf_report_data = {
+            "title": "Vergi Raporu",
+            "sections": [
+                {
+                    "heading": f"Tarih Aralığı: {start_date_db_format} - {end_date_db_format}",
+                    "data": []  # Sadece başlık olarak kullanacağız
+                },
+                {
+                    "heading": "Detaylı Satış KDV Dökümü",
+                    "data": kdv_detail_data  # Tablo verisi
+                },
+                {
+                    "heading": "Özet Bilgiler",
+                    "data": [
+                        ["Açıklama", "Tutar"],
+                        ["Toplam Hesaplanan KDV (Çıkış KDV'si)", f"{total_sales_kdv:.2f} TL"],
+                        ["Giriş KDV'si (Alış KDV'si)", "Manuel giriş veya detaylı fiş/fatura takibi gereklidir."]
+                    ]
+                },
+                {
+                    "heading": "Önemli Not",
+                    "data": [
+                        ["",
+                         "Bu rapor bir mali müşavir raporu değildir. Yalnızca bilgilendirme amaçlıdır. Gerçek vergi beyanlarınız için lütfen bir mali müşavire danışın."]
+                    ]
+                }
+            ]
+        }
+
+        # İstersen burada otomatik olarak PDF oluşturabiliriz
+        # file_path = filedialog.asksaveasfilename(
+        #     defaultextension=".pdf",
+        #     filetypes=[("PDF files", "*.pdf")],
+        #     initialfile=f"Vergi_Raporu_{start_date_db_format}_{end_date_db_format}.pdf",
+        #     title="Vergi Raporunu Kaydet"
+        # )
+        # if file_path:
+        #     try:
+        #         generated_path = self.pdf_generator.generate_general_report_pdf(pdf_report_data, file_path)
+        #         if generated_path:
+        #             self.show_message("PDF Raporu", f"Vergi raporu PDF olarak kaydedildi:\n{generated_path}")
+        #         else:
+        #             self.show_error("PDF Raporu Hatası", "Vergi raporu PDF oluşturulamadı.")
+        #     except Exception as e:
+        #         self.show_error("PDF Raporu Hatası", f"Vergi raporu PDF oluşturulurken hata oluştu: {e}")
+
+    def export_transactions_to_pdf(self):
+        """Ana listedeki gelir/gider verilerini PDF'e aktarır."""
+        data_to_export = []
+        headers = [self.transactions_tree.heading(col_id)['text'] for col_id in self.transactions_tree["columns"]]
+
+        for item_id in self.transactions_tree.get_children():
+            values = self.transactions_tree.item(item_id, 'values')
+            data_to_export.append([str(v) for v in values])  # Tüm değerleri string'e çevir
+
+        if not data_to_export:
+            self.show_message("Bilgi", "Dışa aktarılacak işlem verisi bulunamadı.")
+            return
+
+        file_path = filedialog.asksaveasfilename(defaultextension=".pdf",
+                                                 filetypes=[("PDF dosyaları", "*.pdf")],
+                                                 initialfile="gelir_gider_islemleri_raporu.pdf")
+        if not file_path:
+            return
+
+        report_data = {
+            "title": "Gelir ve Gider İşlemleri Raporu",
+            "sections": [
+                {
+                    "heading": f"Rapor Tarihi: {datetime.now().strftime('%d.%m.%Y %H:%M')}",
+                    "data": []  # Bu bölümün sadece başlığı var, tablo verisi yok
+                },
+                {
+                    "heading": "İşlem Detayları",
+                    "data": [headers] + data_to_export
+                }
+            ]
+        }
+
+        try:
+            generated_path = self.pdf_generator.generate_general_report_pdf(report_data, file_path)
+            if generated_path:
+                self.show_message("Başarılı", f"İşlemler PDF olarak başarıyla kaydedildi: {generated_path}")
+            else:
+                self.show_error("Hata", "PDF raporu oluşturulamadı.")
+        except Exception as e:
+            self.show_error("Hata", f"PDF raporu oluşturulurken bir hata oluştu: {e}")
+            print(f"Hata: İşlemleri PDF'e aktarırken: {e}")
+
+    def export_transactions_to_excel(self):
+        """Ana listedeki gelir/gider verilerini Excel'e aktarır."""
+        data_to_export = []
+        # Not: self.tree yerine self.transactions_tree kullanılıyor
+        headers = [self.transactions_tree.heading(col_id)['text'] for col_id in self.transactions_tree["columns"]]
+
+        for item_id in self.transactions_tree.get_children():
+            values = self.transactions_tree.item(item_id, 'values')
+            data_to_export.append(values)
+
+        if not data_to_export:
+            self.show_message("Bilgi", "Dışa aktarılacak işlem verisi bulunamadı.")
+            return
+
+        file_path = filedialog.asksaveasfilename(defaultextension=".xlsx",
+                                                 filetypes=[("Excel dosyaları", "*.xlsx"), ("CSV dosyaları", "*.csv")],
+                                                 initialfile="gelir_gider_islemleri_raporu.xlsx")
+        if not file_path:
+            return
+
+        try:
+            df = pd.DataFrame(data_to_export, columns=headers)
+            if file_path.endswith('.xlsx'):
+                df.to_excel(file_path, index=False)
+            elif file_path.endswith('.csv'):
+                df.to_csv(file_path, index=False, encoding='utf-8-sig')
+            self.show_message("Başarılı", f"İşlemler Excel olarak başarıyla kaydedildi: {file_path}")
+            os.startfile(file_path)
+        except Exception as e:
+            self.show_error("Hata", f"Excel raporu oluşturulurken bir hata oluştu: {e}")
+            print(f"Hata: İşlemleri Excel'e aktarırken: {e}")
 

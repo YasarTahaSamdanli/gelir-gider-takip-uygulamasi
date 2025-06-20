@@ -1,10 +1,10 @@
 # main.py
 import tkinter as tk
-from database_manager import DatabaseManager
+
 from auth_screens import AuthScreens
+from database_manager import DatabaseManager
 from fingo_app import GelirGiderUygulamasi
 from pdf_generator import _register_pdf_font
-import os
 
 # Font dosyasının yolu (Fingo klasörünün içinde olmalı)
 FONT_FILE_PATH = "Arial.ttf"  # Eğer farklı bir font kullanacaksan burayı değiştir

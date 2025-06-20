@@ -1,4 +1,4 @@
-# pdf_generator.py
+# pdf_generator.py (Lütfen bu kodu kendi pdf_generator.py dosyanızla karşılaştırın ve eksik/hatalı kısımları güncelleyin)
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
@@ -9,10 +9,10 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 import os
 from datetime import datetime
-import json  # Fatura/Teklif kalemlerini JSON'dan okumak için
+import json
 
 # Global font adı (main.py'den veya başka yerden erişilebilir olmalı)
-GLOBAL_REPORTLAB_FONT_NAME = "ArialCustom"
+GLOBAL_REPORTLAB_FONT_NAME = "ArialCustom" # Font adınızın aynısı olduğundan emin olun
 
 
 # Fontu ReportLab'a kaydetme fonksiyonu
@@ -38,26 +38,18 @@ class PDFGenerator:
         self.font_name = font_name
         self.db_manager = db_manager
         self.user_id = user_id
-        # getSampleStyleSheet() çağrısını bir kere yapıp stil nesnesini al
         self.styles = getSampleStyleSheet()
         self._setup_styles()
 
     def _setup_styles(self):
         """PDF için özel stilleri ayarlar."""
-        # ReportLab'ın varsayılan stil sayfasını kopyala, böylece güvenle değiştirebiliriz
-        # ve add metoduyla çakışmayız.
-        # Aslında en doğru yöntem, varsayılan stillerin özelliklerini direkt değiştirmektir
-        # ve kendi eklediğimiz stilleri add metoduyla eklemektir.
-
-        # Title Style: Varsayılan 'Title' stilini doğrudan güncelliyoruz.
-        # Bu, 'KeyError: "Style 'Title' already defined in stylesheet"' hatasını önler.
         if 'Title' in self.styles:
             self.styles['Title'].fontName = self.font_name
             self.styles['Title'].fontSize = 20
             self.styles['Title'].leading = 24
             self.styles['Title'].alignment = TA_CENTER
             self.styles['Title'].spaceAfter = 20
-        else:  # Nadiren buraya düşer, ama tanımlı olsun
+        else:
             self.styles.add(ParagraphStyle(name='Title',
                                            parent=self.styles['h1'] if 'h1' in self.styles else self.styles['Normal'],
                                            fontName=self.font_name,
@@ -66,25 +58,17 @@ class PDFGenerator:
                                            alignment=TA_CENTER,
                                            spaceAfter=20))
 
-        # Ortak bir yardımcı fonksiyon, bir stili ekler veya eğer varsa günceller.
-        # Bu, tekrar tekrar if/else yazmaktan kurtarır.
         def add_or_update_custom_style(style_obj):
             if style_obj.name in self.styles:
-                # Var olan stili güncelle
                 existing_style = self.styles[style_obj.name]
                 for attr, value in style_obj.__dict__.items():
-                    # 'name' ve '_private' özniteliklerini değiştirmemeye dikkat et
                     if not attr.startswith('_') and attr != 'name':
                         setattr(existing_style, attr, value)
             else:
-                # Yeni stili ekle
                 self.styles.add(style_obj)
 
-        # Diğer özel stilleri eklerken bu yardımcı fonksiyonu kullan.
-        # Heading1 Style
         add_or_update_custom_style(ParagraphStyle(name='Heading1',
-                                                  parent=self.styles['h2'] if 'h2' in self.styles else self.styles[
-                                                      'Normal'],
+                                                  parent=self.styles['h2'] if 'h2' in self.styles else self.styles['Normal'],
                                                   fontName=self.font_name,
                                                   fontSize=14,
                                                   leading=18,
@@ -93,7 +77,6 @@ class PDFGenerator:
                                                   spaceAfter=6,
                                                   textColor=HexColor('#0056b3')))
 
-        # BodyText Style
         add_or_update_custom_style(ParagraphStyle(name='BodyText',
                                                   parent=self.styles['Normal'],
                                                   fontName=self.font_name,
@@ -102,7 +85,6 @@ class PDFGenerator:
                                                   alignment=TA_LEFT,
                                                   spaceAfter=6))
 
-        # TableHeader Style
         add_or_update_custom_style(ParagraphStyle(name='TableHeader',
                                                   parent=self.styles['Normal'],
                                                   fontName=self.font_name,
@@ -112,7 +94,6 @@ class PDFGenerator:
                                                   textColor=HexColor('#ffffff'),
                                                   backColor=HexColor('#4CAF50')))
 
-        # TableBody Style
         add_or_update_custom_style(ParagraphStyle(name='TableBody',
                                                   parent=self.styles['Normal'],
                                                   fontName=self.font_name,
@@ -120,7 +101,6 @@ class PDFGenerator:
                                                   leading=11,
                                                   alignment=TA_LEFT))
 
-        # Totals Style
         add_or_update_custom_style(ParagraphStyle(name='Totals',
                                                   parent=self.styles['Normal'],
                                                   fontName=self.font_name,
@@ -130,7 +110,6 @@ class PDFGenerator:
                                                   spaceBefore=10,
                                                   textColor=HexColor('#333333')))
 
-        # GrandTotal Style
         add_or_update_custom_style(ParagraphStyle(name='GrandTotal',
                                                   parent=self.styles['Normal'],
                                                   fontName=self.font_name,
@@ -142,7 +121,6 @@ class PDFGenerator:
                                                   backColor=HexColor('#e6f2ff'),
                                                   borderPadding=(5, 5, 5, 5)))
 
-        # SmallText Style
         add_or_update_custom_style(ParagraphStyle(name='SmallText',
                                                   parent=self.styles['Normal'],
                                                   fontName=self.font_name,
@@ -167,43 +145,39 @@ class PDFGenerator:
         doc = SimpleDocTemplate(filename, pagesize=A4, rightMargin=cm, leftMargin=cm, topMargin=cm, bottomMargin=cm)
         story = []
 
-        # Başlık
         story.append(Paragraph(report_data.get("title", "Genel Rapor"), self.styles['Title']))
         story.append(Spacer(1, 0.5 * cm))
 
         for section in report_data.get("sections", []):
-            story.append(Paragraph(section.get("heading", ""), self.styles['Heading1']))
-            story.append(Spacer(1, 0.2 * cm))
+            if section.get("heading"): # Başlık varsa ekle
+                story.append(Paragraph(section.get("heading"), self.styles['Heading1']))
+                story.append(Spacer(1, 0.2 * cm))
 
             data = section.get("data", [])
-            if data and len(data) > 0:  # Veri olup olmadığını ve başlık satırı olduğunu kontrol et
-                # Tablo oluştur
+            if data and len(data) > 0:
                 table_data = []
-                # Başlık satırı
                 header_row = [Paragraph(col, self.styles['TableHeader']) for col in data[0]]
                 table_data.append(header_row)
 
-                # Veri satırları
                 for row_data in data[1:]:
                     table_data.append([Paragraph(str(item), self.styles['TableBody']) for item in row_data])
 
-                # Kolon genişliklerini dinamik olarak ayarla
                 if len(data[0]) > 0:
                     col_widths = [doc.width / len(data[0])] * len(data[0])
                 else:
-                    col_widths = [doc.width]  # Tek sütunlu durum için fallback
+                    col_widths = [doc.width]
 
                 table = Table(table_data, colWidths=col_widths)
                 table.setStyle(TableStyle([
-                    ('BACKGROUND', (0, 0), (-1, 0), HexColor('#4CAF50')),  # Başlık satırı yeşil
+                    ('BACKGROUND', (0, 0), (-1, 0), HexColor('#4CAF50')),
                     ('TEXTCOLOR', (0, 0), (-1, 0), HexColor('#ffffff')),
                     ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
                     ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
                     ('FONTNAME', (0, 0), (-1, 0), self.font_name),
                     ('FONTSIZE', (0, 0), (-1, 0), 9),
                     ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-                    ('BACKGROUND', (0, 1), (-1, -1), HexColor('#f5f5f5')),  # Veri satırları açık gri
-                    ('GRID', (0, 0), (-1, -1), 0.5, HexColor('#cccccc')),  # Izgara çizgileri
+                    ('BACKGROUND', (0, 1), (-1, -1), HexColor('#f5f5f5')),
+                    ('GRID', (0, 0), (-1, -1), 0.5, HexColor('#cccccc')),
                     ('BOX', (0, 0), (-1, -1), 1, HexColor('#cccccc')),
                     ('LEFTPADDING', (0, 0), (-1, -1), 6),
                     ('RIGHTPADDING', (0, 0), (-1, -1), 6),
@@ -213,10 +187,12 @@ class PDFGenerator:
                 story.append(table)
                 story.append(Spacer(1, 0.5 * cm))
             else:
-                story.append(Paragraph("Gösterilecek veri bulunamadı.", self.styles['BodyText']))
+                # Sadece başlık varsa ve veri yoksa buraya düşecek
+                if not section.get("heading"): # Eğer başlık da yoksa boş bir paragraf ekle
+                    story.append(Paragraph("Gösterilecek veri bulunamadı.", self.styles['BodyText']))
                 story.append(Spacer(1, 0.5 * cm))
 
-        # PDF'i oluştur
+
         try:
             doc.build(story)
             return os.path.abspath(filename)
@@ -227,52 +203,31 @@ class PDFGenerator:
         """
         Fatura veya Teklif belgesini PDF olarak oluşturur.
         doc_data: fingo_app.py'den gelen sözlük formatında fatura/teklif detayları.
-        Örnek doc_data yapısı:
-        {
-            "doc_type": "Fatura",
-            "doc_number": "FTR-2024-00001",
-            "customer_name": "Müşteri Adı",
-            "doc_date": "2024-06-19",
-            "due_valid_date": "2024-07-19",
-            "items": [{"ad": "Ürün 1", "miktar": 2, ...}],
-            "total_excl_kdv": 100.0,
-            "total_kdv": 18.0,
-            "notes": "Ek Notlar",
-            "status": "Ödendi"
-        }
         """
         doc_type = doc_data.get("doc_type", "Belge")
         document_number = doc_data.get("doc_number", "N/A")
         customer_name = doc_data.get("customer_name", "N/A")
         document_date = doc_data.get("doc_date", "N/A")
         due_validity_date = doc_data.get("due_valid_date", "N/A")
-        items = doc_data.get("items", [])  # Zaten JSON'dan dönüştürülmüş liste olmalı
+        items = doc_data.get("items", [])
         total_excl_kdv = doc_data.get("total_excl_kdv", 0.0)
         total_kdv = doc_data.get("total_kdv", 0.0)
         notes = doc_data.get("notes", "")
         status = doc_data.get("status", "N/A")
 
-        # Müşteri bilgilerini al
-        # db_manager'daki get_customer_by_name metodunu kullanarak müşteri bilgilerini al
         customer_info = self.db_manager.get_customer_by_name(customer_name, self.user_id)
-        # customer_info bir tuple döneceği için güvenli erişim sağlayalım
-        customer_address = customer_info[2] if customer_info and len(customer_info) > 2 and customer_info[
-            2] else "Belirtilmemiş"
-        customer_phone = customer_info[3] if customer_info and len(customer_info) > 3 and customer_info[
-            3] else "Belirtilmemiş"
-        customer_email = customer_info[4] if customer_info and len(customer_info) > 4 and customer_info[
-            4] else "Belirtilmemiş"
+        customer_address = customer_info[2] if customer_info and len(customer_info) > 2 and customer_info[2] else "Belirtilmemiş"
+        customer_phone = customer_info[3] if customer_info and len(customer_info) > 3 and customer_info[3] else "Belirtilmemiş"
+        customer_email = customer_info[4] if customer_info and len(customer_info) > 4 and customer_info[4] else "Belirtilmemiş"
 
-        filename = f"{document_number}_{doc_type}.pdf"
+        filename = f"{document_number}_{doc_type}.pdf" # Dosya adı burada belirleniyor
         doc = SimpleDocTemplate(filename, pagesize=A4, rightMargin=1.5 * cm, leftMargin=1.5 * cm, topMargin=1.5 * cm,
                                 bottomMargin=1.5 * cm)
         story = []
 
-        # Başlık
         story.append(Paragraph(f"{doc_type.upper()}", self.styles['Title']))
         story.append(Spacer(1, 0.5 * cm))
 
-        # Belge ve Müşteri Bilgileri
         info_data = [
             [Paragraph("Belge Numarası:", self.styles['BodyText']),
              Paragraph(document_number, self.styles['BodyText'])],
@@ -289,7 +244,6 @@ class PDFGenerator:
             [Paragraph("E-posta:", self.styles['BodyText']), Paragraph(customer_email, self.styles['BodyText'])]
         ]
 
-        # Tabloları yan yana koymak için
         header_table_data = [
             [
                 Table(info_data, colWidths=[4 * cm, 6 * cm], style=TableStyle([
@@ -305,7 +259,6 @@ class PDFGenerator:
         story.append(Table(header_table_data, colWidths=[doc.width / 2, doc.width / 2]))
         story.append(Spacer(1, 0.5 * cm))
 
-        # Kalemler Tablosu
         story.append(Paragraph("Kalemler", self.styles['Heading1']))
         story.append(Spacer(1, 0.2 * cm))
 
@@ -315,7 +268,7 @@ class PDFGenerator:
                 Paragraph("Miktar", self.styles['TableHeader']),
                 Paragraph("Birim Fiyat (₺)", self.styles['TableHeader']),
                 Paragraph("KDV %", self.styles['TableHeader']),
-                Paragraph("KDV Miktar (₺)", self.styles['TableHeader']),
+                Paragraph("KDV Tutarı (₺)", self.styles['TableHeader']),
                 Paragraph("Ara Toplam (₺)", self.styles['TableHeader'])
             ]
         ]
@@ -330,9 +283,7 @@ class PDFGenerator:
                 Paragraph(f"{item.get('ara_toplam', 0):.2f}", self.styles['TableBody'])
             ])
 
-        # Kolon genişlikleri orantılı olarak ayarlanabilir
         col_widths = [2.5 * cm, 1.5 * cm, 2 * cm, 1.5 * cm, 2 * cm, 2.5 * cm]
-        # Toplam belge genişliğine göre yeniden hesapla
         total_col_width = sum(col_widths)
         col_widths_normalized = [w * (doc.width / total_col_width) for w in col_widths]
 
@@ -348,8 +299,8 @@ class PDFGenerator:
             ('BACKGROUND', (0, 1), (-1, -1), HexColor('#f5f5f5')),
             ('GRID', (0, 0), (-1, -1), 0.5, HexColor('#cccccc')),
             ('BOX', (0, 0), (-1, -1), 1, HexColor('#cccccc')),
-            ('ALIGN', (1, 1), (1, -1), 'CENTER'),  # Miktar sütunu ortala
-            ('ALIGN', (2, 1), (-1, -1), 'RIGHT'),  # Fiyat, KDV sütunlarını sağa hizala
+            ('ALIGN', (1, 1), (1, -1), 'CENTER'),
+            ('ALIGN', (2, 1), (-1, -1), 'RIGHT'),
             ('LEFTPADDING', (0, 0), (-1, -1), 4),
             ('RIGHTPADDING', (0, 0), (-1, -1), 4),
             ('TOPPADDING', (0, 0), (-1, -1), 3),
@@ -358,13 +309,11 @@ class PDFGenerator:
         story.append(item_table)
         story.append(Spacer(1, 0.5 * cm))
 
-        # Toplamlar
         story.append(Paragraph(f"KDV Hariç Toplam: {total_excl_kdv:.2f} TL", self.styles['Totals']))
         story.append(Paragraph(f"Toplam KDV: {total_kdv:.2f} TL", self.styles['Totals']))
         story.append(Paragraph(f"GENEL TOPLAM: {total_excl_kdv + total_kdv:.2f} TL", self.styles['GrandTotal']))
         story.append(Spacer(1, 0.5 * cm))
 
-        # Notlar
         if notes:
             story.append(Paragraph("Notlar:", self.styles['Heading1']))
             story.append(Paragraph(notes, self.styles['BodyText']))
@@ -378,4 +327,3 @@ class PDFGenerator:
             return os.path.abspath(filename)
         except Exception as e:
             raise Exception(f"PDF oluşturma hatası: {e}")
-
